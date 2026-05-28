@@ -3,13 +3,13 @@ import { z } from 'zod';
 import { pinJson } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
 
-const milestoneSchema = z.object({
+export const milestoneSchema = z.object({
   playerId: z.string().min(1),
   milestoneType: z.enum(['identity', 'performance', 'trial_offer']),
   evidenceUri: z.string().min(1),
 });
 
-const pendingQuerySchema = z.object({
+export const pendingQuerySchema = z.object({
   region: z.string().optional(),
   playerId: z.string().optional(),
 });
