@@ -7,11 +7,13 @@ import scoutRoutes from './routes/scout';
 import validatorRoutes from './routes/validator';
 import adminRoutes from './routes/admin';
 import { errorHandler } from './middleware/errorHandler';
+import { securityHeaders } from './middleware/securityHeaders';
 import { indexEvents } from './services/indexer';
 
 const app = express();
 
 app.use(cors());
+app.use(securityHeaders);
 app.use(express.json());
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));

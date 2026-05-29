@@ -1,27 +1,31 @@
-// Cache TTL semantics:
-// - set() should accept an optional ttl parameter (in milliseconds)
-// - get() should return null if the key has expired
-// - invalidate() should immediately remove a key from the cache regardless of TTL
+/**
+ * Search cache invalidation stubs.
+ *
+ * TODO (Redis): Replace the in-memory Set with a Redis client.
+ *   import { createClient } from 'redis';
+ *   const redis = createClient({ url: process.env.REDIS_URL });
+ *   await redis.del(key);
+ *
+ * Cache key conventions:
+ *   players:list          – all paginated player search results
+ *   players:<playerId>    – single player profile
+ *   milestones:<playerId> – milestone list for a player
+ */
 
-const cache = new Map<string, { value: any; expiresAt: number | null }>();
+const cache = new Map<string, unknown>();
 
-export function get<T>(key: string): T | null {
-  const entry = cache.get(key);
-  if (!entry) return null;
-
-  if (entry.expiresAt !== null && Date.now() > entry.expiresAt) {
-    cache.delete(key);
-    return null;
+export function invalidatePlayerCache(playerId?: string): void {
+  // TODO (Redis): await redis.del('players:list')
+  cache.delete('players:list');
+  if (playerId) {
+    // TODO (Redis): await redis.del(`players:${playerId}`)
+    cache.delete(`players:${playerId}`);
   }
-
-  return entry.value as T;
 }
 
-export function set(key: string, value: any, ttl?: number): void {
-  const expiresAt = ttl ? Date.now() + ttl : null;
-  cache.set(key, { value, expiresAt });
-}
-
-export function invalidate(key: string): void {
-  cache.delete(key);
+export function invalidateMilestoneCache(playerId: string): void {
+  // TODO (Redis): await redis.del(`milestones:${playerId}`)
+  cache.delete(`milestones:${playerId}`);
+  // Also bust the player list so updated progress tier is reflected
+  invalidatePlayerCache(playerId);
 }

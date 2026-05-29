@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { server } from './stellar';
 import config from '../config';
-import { ContractEvent, ContractEventType } from '../types';
+import { EventRecord, ContractEventType } from '../types';
 
 // ─── DB setup ────────────────────────────────────────────────────────────────
 
@@ -69,15 +69,15 @@ export async function indexEvents(): Promise<void> {
 
 // ─── Query helpers ────────────────────────────────────────────────────────────
 
-export function getEvents(type?: ContractEventType): ContractEvent[] {
+export function getEvents(type?: ContractEventType): EventRecord[] {
   const rows = type
     ? (db.prepare('SELECT * FROM events WHERE type = ? ORDER BY ledger ASC').all(type) as any[])
     : (db.prepare('SELECT * FROM events ORDER BY ledger ASC').all() as any[]);
 
   return rows.map((r) => ({
+    source: config.contractId,
     type: r.type as ContractEventType,
-    ledger: r.ledger,
-    txHash: r.tx_hash,
     payload: JSON.parse(r.payload),
+    contractAddress: config.contractId,
   }));
 }
