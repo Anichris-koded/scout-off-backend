@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { pinJson, gatewayUrl } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
+import { invalidatePlayerCache } from '../services/cache';
 import { ApiResponse } from '../types';
 
 const registerSchema = z.object({
@@ -24,6 +25,8 @@ export async function registerPlayer(req: Request, res: Response, next: NextFunc
   try {
     const { wallet, position, region, metadata } = registerSchema.parse(req.body);
     const cid = await pinJson({ wallet, position, region, ...metadata });
+    // Invalidate player search cache so new profile appears in results
+    invalidatePlayerCache();
     const body: ApiResponse<{ metadataUri: string; gatewayUrl: string }> = {
       success: true,
       data: { metadataUri: cid, gatewayUrl: gatewayUrl(cid) },

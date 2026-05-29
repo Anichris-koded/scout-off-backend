@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { pinJson } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
+import { invalidateMilestoneCache } from '../services/cache';
 
 const milestoneSchema = z.object({
   playerId: z.string().min(1),
@@ -19,6 +20,9 @@ export async function submitMilestoneEvidence(req: Request, res: Response, next:
   try {
     const { playerId, milestoneType, evidenceUri } = milestoneSchema.parse(req.body);
     const evidenceCid = await pinJson({ playerId, milestoneType, evidenceUri });
+    // Invalidate milestone + player cache so updated progress tier is reflected
+    invalidateMilestoneCache(playerId);
+    console.log(`[validator] evidence pinned – playerId=${playerId} cid=${evidenceCid}`);
     res.status(201).json({ success: true, data: { evidenceCid } });
   } catch (err) {
     next(err);
