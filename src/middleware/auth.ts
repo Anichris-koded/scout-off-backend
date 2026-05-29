@@ -1,10 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import config from '../config';
+import { JwtPayload } from '../types';
 
-export interface AuthPayload extends jwt.JwtPayload {
-  role?: string;
-}
+export interface AuthPayload extends jwt.JwtPayload, Partial<JwtPayload> {}
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;

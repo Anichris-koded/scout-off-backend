@@ -26,6 +26,8 @@ export interface PlayerMetadata {
 
 export type MilestoneType = 'identity' | 'performance' | 'trial_offer';
 
+export type MilestoneStatus = 'pending' | 'approved' | 'rejected';
+
 export interface Milestone {
   milestoneId: string;
   playerId: string;
@@ -34,6 +36,13 @@ export interface Milestone {
   validator: string;   // Stellar address
   approved: boolean;
   createdAt: number;
+}
+
+export interface PlayerMilestone {
+  status: MilestoneStatus;
+  approvedBy: string;
+  submittedAt: number;
+  evidenceUri: string;
 }
 
 // ─── Scout ────────────────────────────────────────────────────────────────────
@@ -71,6 +80,15 @@ export interface FilterPlayersQuery {
   pageSize?: number;
 }
 
+// ─── Auth ──────────────────────────────────────────────────────────────────────
+
+export interface JwtPayload {
+  wallet: string;
+  role: string;
+  exp: number;
+  permissions?: string[];
+}
+
 // ─── SEP-10 ───────────────────────────────────────────────────────────────────
 
 export interface Sep10Challenge {
@@ -100,4 +118,11 @@ export interface ContractEvent {
   ledger: number;
   txHash: string;
   payload: Record<string, unknown>;
+}
+
+export interface EventRecord {
+  source: string;
+  type: ContractEventType;
+  payload: Record<string, unknown>;
+  contractAddress: string;
 }

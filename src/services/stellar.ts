@@ -19,14 +19,37 @@ export async function getLatestLedger(): Promise<number> {
   return ledger.sequence;
 }
 
-/**
- * Health check: returns true if the Soroban RPC is reachable.
- */
-export async function stellarHealth(): Promise<boolean> {
-  try {
-    await server.getLatestLedger();
-    return true;
-  } catch {
-    return false;
+export type PaymentStatus = 'pending' | 'submitted' | 'failed';
+
+export interface ContactPaymentResult {
+  transactionId: string;
+  status: PaymentStatus;
+}
+
+export class PaymentError extends Error {
+  constructor(
+    message: string,
+    public readonly code: 'INSUFFICIENT_FUNDS' | 'INVALID_ACCOUNT' | 'NETWORK_ERROR' | 'UNKNOWN',
+  ) {
+    super(message);
+    this.name = 'PaymentError';
   }
+}
+
+/**
+ * Stub: submit a pay-to-contact micro-fee on Stellar.
+ * Replace the body with real Soroban invocation when ready.
+ */
+export async function submitContactPayment(
+  scoutWallet: string,
+  playerId: string,
+): Promise<ContactPaymentResult> {
+  if (!scoutWallet || !playerId) {
+    throw new PaymentError('Missing scoutWallet or playerId', 'INVALID_ACCOUNT');
+  }
+  // TODO: build and submit pay_to_contact Soroban transaction
+  return {
+    transactionId: `stub-txid-${Date.now()}`,
+    status: 'submitted',
+  };
 }
