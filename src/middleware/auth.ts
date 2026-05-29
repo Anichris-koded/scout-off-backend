@@ -1,10 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import config from '../config';
+import { JwtPayload } from '../types';
 
-export interface AuthPayload extends jwt.JwtPayload {
-  role?: string;
-}
+export interface AuthPayload extends jwt.JwtPayload, Partial<JwtPayload> {}
 
 /**
  * Middleware that verifies any valid JWT Bearer token.

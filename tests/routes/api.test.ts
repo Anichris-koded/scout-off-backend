@@ -7,6 +7,17 @@ describe('GET /health', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
   });
+
+  it('includes a healthStatus object', async () => {
+    const res = await request(app).get('/health');
+    expect(res.body).toHaveProperty('healthStatus');
+    expect(typeof res.body.healthStatus).toBe('object');
+  });
+
+  it('healthStatus.stellar is ok or error or disabled', async () => {
+    const res = await request(app).get('/health');
+    expect(['ok', 'error', 'disabled']).toContain(res.body.healthStatus.stellar);
+  });
 });
 
 describe('GET /api/players', () => {
