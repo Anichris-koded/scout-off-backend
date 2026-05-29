@@ -357,6 +357,8 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions.
 | `PLATFORM_FEE_BPS`        | Platform fee in basis points (default: 500)         |
 | `PORT`                    | Backend API port (default: 4000)                    |
 | `DB_PATH`                 | SQLite database file path (default: `scout-off.db`) |
+| `LOG_LEVEL`               | Log verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
+| `STELLAR_HEALTH_CHECK_ENABLED` | Include Stellar RPC in `/health` response (default: `true`; set `false` to disable in staging) |
 
 ## Testing
 

@@ -25,6 +25,12 @@ const config = {
   },
   platformFeeBps: parseInt(process.env.PLATFORM_FEE_BPS ?? '500', 10),
   dbPath: process.env.DB_PATH ?? 'scout-off.db',
+  securityHeaders: {
+    hsts: process.env.SECURITY_HSTS ?? 'max-age=31536000; includeSubDomains',
+    xContentTypeOptions: process.env.SECURITY_X_CONTENT_TYPE_OPTIONS ?? 'nosniff',
+    xFrameOptions: process.env.SECURITY_X_FRAME_OPTIONS ?? 'DENY',
+    referrerPolicy: process.env.SECURITY_REFERRER_POLICY ?? 'no-referrer',
+  },
 };
 
 export default config;

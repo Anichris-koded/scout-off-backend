@@ -2,14 +2,15 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { pinJson } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
+import { invalidateMilestoneCache } from '../services/cache';
 
-const milestoneSchema = z.object({
+export const milestoneSchema = z.object({
   playerId: z.string().min(1),
   milestoneType: z.enum(['identity', 'performance', 'trial_offer']),
   evidenceUri: z.string().min(1),
 });
 
-const pendingQuerySchema = z.object({
+export const pendingQuerySchema = z.object({
   region: z.string().optional(),
   playerId: z.string().optional(),
 });
@@ -19,6 +20,9 @@ export async function submitMilestoneEvidence(req: Request, res: Response, next:
   try {
     const { playerId, milestoneType, evidenceUri } = milestoneSchema.parse(req.body);
     const evidenceCid = await pinJson({ playerId, milestoneType, evidenceUri });
+    // Invalidate milestone + player cache so updated progress tier is reflected
+    invalidateMilestoneCache(playerId);
+    console.log(`[validator] evidence pinned – playerId=${playerId} cid=${evidenceCid}`);
     res.status(201).json({ success: true, data: { evidenceCid } });
   } catch (err) {
     next(err);
@@ -36,7 +40,13 @@ export async function getPendingMilestones(req: Request, res: Response, next: Ne
     let pending = submitted.filter((m) => !approvedIds.has(m.milestone_id));
     if (region) pending = pending.filter((m) => m.region === region);
     if (playerId) pending = pending.filter((m) => m.playerId === playerId || m.player_id === playerId);
-    res.json({ success: true, data: pending });
+    const milestones: PlayerMilestone[] = pending.map((m) => ({
+      status: 'pending' as const,
+      approvedBy: m.validator as string || '',
+      submittedAt: m.created_at as number || Math.floor(Date.now() / 1000),
+      evidenceUri: m.evidence_uri as string || m.evidenceUri as string || '',
+    }));
+    res.json({ success: true, data: milestones });
   } catch (err) {
     next(err);
   }
