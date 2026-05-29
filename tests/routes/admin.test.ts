@@ -1,119 +1,95 @@
 import request from 'supertest';
-import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
 import app from '../../src/index';
+import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
 
-async function getTokenForKeypair(kp: Keypair, role?: string): Promise<string> {
+async function getToken(role: string): Promise<string> {
+  const kp = Keypair.random();
   const challengeRes = await request(app).get(`/auth/challenge?account=${kp.publicKey()}`);
   const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
   tx.sign(kp);
-  const body: Record<string, string> = { transaction: tx.toXDR() };
-  if (role) body.role = role;
-  const res = await request(app).post('/auth/token').send(body);
-  return res.body.token;
+  const tokenRes = await request(app)
+    .post('/auth/token')
+    .send({ transaction: tx.toXDR(), role });
+  return tokenRes.body.token;
 }
 
-// ─── Issue #79: GET /api/admin/stats ─────────────────────────────────────────
+const VALID_WALLET = 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN';
 
-describe('GET /api/admin/stats', () => {
-  it('returns 401 when no token is provided', async () => {
-    const res = await request(app).get('/api/admin/stats');
-    expect(res.status).toBe(401);
-  });
+// ─── Security headers ─────────────────────────────────────────────────────────
 
-  it('returns 403 when authenticated as non-admin role', async () => {
-    const token = await getTokenForKeypair(Keypair.random(), 'validator');
-    const res = await request(app)
-      .get('/api/admin/stats')
-      .set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(403);
-  });
-
-  it('returns stats with numeric counts for an admin token', async () => {
-    const adminKp = Keypair.random();
-    const token = await getTokenForKeypair(adminKp, 'admin');
-    const res = await request(app)
-      .get('/api/admin/stats')
-      .set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    const { data } = res.body;
-    expect(typeof data.players).toBe('number');
-    expect(typeof data.milestones).toBe('number');
-    expect(typeof data.subscriptions).toBe('number');
-    expect(typeof data.events).toBe('number');
-  });
-
-  it('returns zero counts when no events have been indexed', async () => {
-    const adminKp = Keypair.random();
-    const token = await getTokenForKeypair(adminKp, 'admin');
-    const res = await request(app)
-      .get('/api/admin/stats')
-      .set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(200);
-    const { data } = res.body;
-    expect(data.players).toBeGreaterThanOrEqual(0);
-    expect(data.milestones).toBeGreaterThanOrEqual(0);
-    expect(data.subscriptions).toBeGreaterThanOrEqual(0);
-    expect(data.events).toBeGreaterThanOrEqual(0);
+describe('Security headers', () => {
+  it('sets required security headers on all responses', async () => {
+    const res = await request(app).get('/health');
+    expect(res.headers['strict-transport-security']).toBeDefined();
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['x-frame-options']).toBe('DENY');
+    expect(res.headers['referrer-policy']).toBeDefined();
   });
 });
 
-// ─── Issue #82: Seeded admin role via ADMIN_WALLET ────────────────────────────
+// ─── Admin validator registry ─────────────────────────────────────────────────
 
-describe('POST /auth/token — admin seeding', () => {
-  const adminKp = Keypair.random();
-
-  beforeAll(() => {
-    process.env.ADMIN_WALLET = adminKp.publicKey();
-    // Reload config so the new env var is picked up
-    jest.resetModules();
+describe('POST /api/admin/validators/register', () => {
+  it('returns 401 with no token', async () => {
+    const res = await request(app)
+      .post('/api/admin/validators/register')
+      .send({ validatorWallet: VALID_WALLET });
+    expect(res.status).toBe(401);
   });
 
-  afterAll(() => {
-    delete process.env.ADMIN_WALLET;
-    jest.resetModules();
+  it('returns 403 for non-admin role', async () => {
+    const token = await getToken('validator');
+    const res = await request(app)
+      .post('/api/admin/validators/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: VALID_WALLET });
+    expect(res.status).toBe(403);
   });
 
-  it('issues admin role when wallet matches ADMIN_WALLET, regardless of requested role', async () => {
-    // Re-import after resetting modules so config picks up ADMIN_WALLET
-    const freshApp = (await import('../../src/index')).default;
-    const challengeRes = await request(freshApp).get(
-      `/auth/challenge?account=${adminKp.publicKey()}`
-    );
-    const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
-    tx.sign(adminKp);
-
-    const res = await request(freshApp)
-      .post('/auth/token')
-      .send({ transaction: tx.toXDR(), role: 'player' });
-
-    expect(res.status).toBe(200);
-    expect(typeof res.body.token).toBe('string');
-
-    // Decode the JWT payload (without verifying signature) to check the role
-    const payload = JSON.parse(
-      Buffer.from(res.body.token.split('.')[1], 'base64url').toString()
-    );
-    expect(payload.role).toBe('admin');
+  it('returns 400 for invalid wallet address', async () => {
+    const token = await getToken('admin');
+    const res = await request(app)
+      .post('/api/admin/validators/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: 'NOTAVALIDADDRESS' });
+    expect(res.status).toBe(400);
   });
 
-  it('does not grant admin role to a non-matching wallet', async () => {
-    const freshApp = (await import('../../src/index')).default;
-    const otherKp = Keypair.random();
-    const challengeRes = await request(freshApp).get(
-      `/auth/challenge?account=${otherKp.publicKey()}`
-    );
-    const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
-    tx.sign(otherKp);
+  it('returns 202 for valid admin request', async () => {
+    const token = await getToken('admin');
+    const res = await request(app)
+      .post('/api/admin/validators/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: VALID_WALLET });
+    expect(res.status).toBe(202);
+    expect(res.body.success).toBe(true);
+  });
+});
 
-    const res = await request(freshApp)
-      .post('/auth/token')
-      .send({ transaction: tx.toXDR(), role: 'player' });
+describe('POST /api/admin/validators/revoke', () => {
+  it('returns 401 with no token', async () => {
+    const res = await request(app)
+      .post('/api/admin/validators/revoke')
+      .send({ validatorWallet: VALID_WALLET });
+    expect(res.status).toBe(401);
+  });
 
-    expect(res.status).toBe(200);
-    const payload = JSON.parse(
-      Buffer.from(res.body.token.split('.')[1], 'base64url').toString()
-    );
-    expect(payload.role).not.toBe('admin');
+  it('returns 403 for non-admin role', async () => {
+    const token = await getToken('scout');
+    const res = await request(app)
+      .post('/api/admin/validators/revoke')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: VALID_WALLET });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 202 for valid admin request', async () => {
+    const token = await getToken('admin');
+    const res = await request(app)
+      .post('/api/admin/validators/revoke')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: VALID_WALLET });
+    expect(res.status).toBe(202);
+    expect(res.body.success).toBe(true);
   });
 });

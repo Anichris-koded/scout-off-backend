@@ -7,6 +7,17 @@ describe('GET /health', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
   });
+
+  it('includes a healthStatus object', async () => {
+    const res = await request(app).get('/health');
+    expect(res.body).toHaveProperty('healthStatus');
+    expect(typeof res.body.healthStatus).toBe('object');
+  });
+
+  it('healthStatus.stellar is ok or error or disabled', async () => {
+    const res = await request(app).get('/health');
+    expect(['ok', 'error', 'disabled']).toContain(res.body.healthStatus.stellar);
+  });
 });
 
 describe('GET /api/players', () => {
@@ -128,6 +139,18 @@ async function getPlayerToken(): Promise<string> {
   return tokenRes.body.token;
 }
 
+async function getAdminToken(): Promise<string> {
+  const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
+  const kp = Keypair.random();
+  const challengeRes = await request(app).get(`/auth/challenge?account=${kp.publicKey()}`);
+  const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
+  tx.sign(kp);
+  const tokenRes = await request(app)
+    .post('/auth/token')
+    .send({ transaction: tx.toXDR(), role: 'admin' });
+  return tokenRes.body.token;
+}
+
 describe('GET /api/validators/milestones/pending', () => {
   it('returns 401 when no token is provided', async () => {
     const res = await request(app).get('/api/validators/milestones/pending');
@@ -159,6 +182,59 @@ describe('GET /api/validators/milestones/pending', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+});
+
+describe('GET /api/admin/events', () => {
+  it('returns 401 when no token is provided', async () => {
+    const res = await request(app).get('/api/admin/events');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 when authenticated as non-admin role', async () => {
+    const token = await getPlayerToken();
+    const res = await request(app)
+      .get('/api/admin/events')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 403 when authenticated as validator role', async () => {
+    const token = await getValidatorToken();
+    const res = await request(app)
+      .get('/api/admin/events')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns event list for authenticated admin', async () => {
+    const token = await getAdminToken();
+    const res = await request(app)
+      .get('/api/admin/events')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+});
+
+describe('GET /api/admin/fees', () => {
+  it('returns 403 when authenticated as non-admin role', async () => {
+    const token = await getValidatorToken();
+    const res = await request(app)
+      .get('/api/admin/fees')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns fee list for authenticated admin', async () => {
+    const token = await getAdminToken();
+    const res = await request(app)
+      .get('/api/admin/fees')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
   });
 });
 

@@ -2,16 +2,17 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { pinJson, gatewayUrl } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
+import { invalidatePlayerCache } from '../services/cache';
 import { ApiResponse } from '../types';
 
-const registerSchema = z.object({
+export const registerSchema = z.object({
   wallet: z.string().min(56).max(56),
   position: z.string().min(1),
   region: z.string().min(1),
   metadata: z.record(z.unknown()),
 });
 
-const filterSchema = z.object({
+export const filterSchema = z.object({
   region: z.string().optional(),
   position: z.string().optional(),
   minTier: z.coerce.number().int().min(0).max(3).optional(),
@@ -24,6 +25,8 @@ export async function registerPlayer(req: Request, res: Response, next: NextFunc
   try {
     const { wallet, position, region, metadata } = registerSchema.parse(req.body);
     const cid = await pinJson({ wallet, position, region, ...metadata });
+    // Invalidate player search cache so new profile appears in results
+    invalidatePlayerCache();
     const body: ApiResponse<{ metadataUri: string; gatewayUrl: string }> = {
       success: true,
       data: { metadataUri: cid, gatewayUrl: gatewayUrl(cid) },
@@ -44,7 +47,10 @@ export async function getPlayer(req: Request, res: Response, next: NextFunction)
       res.status(404).json({ success: false, error: 'Player not found' });
       return;
     }
-    res.json({ success: true, data: events[0].payload });
+    const payload = events[0].payload;
+    const level = (Number(payload.progress_level ?? 0) as ProgressLevel);
+    const { tierName, tierDescription } = getTierMeta(level);
+    res.json({ success: true, data: { ...payload, tierName, tierDescription } });
   } catch (err) {
     next(err);
   }
