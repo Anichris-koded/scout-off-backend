@@ -39,6 +39,9 @@
     "preset": "ts-jest",
     "testEnvironment": "node",
     "testMatch": ["**/tests/**/*.test.ts"],
-    "setupFiles": ["<rootDir>/tests/setup.ts"]
+    "setupFiles": ["<rootDir>/tests/setup.ts"],
+    "moduleNameMapper": {
+      "^better-sqlite3$": "<rootDir>/__mocks__/better-sqlite3.js"
+    }
   }
 }

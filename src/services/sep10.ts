@@ -40,6 +40,21 @@ export function buildChallenge(accountId: string): string {
 }
 
 /**
+ * Extract the client account from a challenge XDR without verifying signatures.
+ * Used to determine the effective role before issuing a token.
+ */
+export function extractAccount(xdr: string): string | null {
+  try {
+    const network =
+      config.network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+    const tx = new Transaction(xdr, network);
+    return tx.operations[0].source ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Verify the client-signed challenge XDR and issue a JWT.
  */
 export function verifyAndIssueToken(xdr: string, role?: string): { token: string; account: string } {

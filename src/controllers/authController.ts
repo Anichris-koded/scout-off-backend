@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { Keypair } from '@stellar/stellar-sdk';
-import { buildChallenge, verifyAndIssueToken } from '../services/sep10';
+import { buildChallenge, verifyAndIssueToken, extractAccount } from '../services/sep10';
 import config from '../config';
 
 const TOKEN_TTL_SECONDS = 86400;
@@ -33,7 +33,11 @@ export function getChallenge(req: Request, res: Response, next: NextFunction): v
 export function postToken(req: Request, res: Response, next: NextFunction): void {
   try {
     const { transaction, role } = tokenSchema.parse(req.body);
-    const { token, account } = verifyAndIssueToken(transaction, role);
+    // Seed admin: if the authenticated wallet matches ADMIN_WALLET, always issue admin role
+    const candidate = extractAccount(transaction);
+    const effectiveRole =
+      config.adminWallet && candidate === config.adminWallet ? 'admin' : role;
+    const { token, account } = verifyAndIssueToken(transaction, effectiveRole);
     const expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
     res.json({ token, account, expiresAt });
   } catch (err) {
