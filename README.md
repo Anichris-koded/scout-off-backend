@@ -314,6 +314,7 @@ npm run dev
 | `npm run build` | `tsc` | Compile TypeScript to `dist/` |
 | `npm start` | `node dist/index.js` | Run the compiled server (run `build` first) |
 | `npm test` | `jest --runInBand` | Run the test suite |
+| `npm run lint` | `eslint 'src/**/*.ts' 'tests/**/*.ts' --ext .ts` | Run TypeScript linting |
 
 On startup the server will:
 - Open (or create) a SQLite database at `DB_PATH` (default: `scout-off.db`)
