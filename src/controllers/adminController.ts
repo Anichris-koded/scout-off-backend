@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { getEvents } from '../services/indexer';
 import { AdminEvent, FeeHistoryItem, ApiResponse } from '../types';
+import config from '../config';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
@@ -85,6 +86,42 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
     console.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet}`);
     // TODO: invoke revoke_validator on Soroban contract
     res.status(202).json({ success: true, message: `Validator ${validatorWallet} revocation submitted` });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const introspectSchema = z.object({
+  token: z.string().min(1, 'token is required'),
+});
+
+/** POST /api/admin/introspect */
+export async function introspectToken(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = introspectSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0].message });
+      return;
+    }
+
+    let payload: jwt.JwtPayload;
+    try {
+      payload = jwt.verify(parsed.data.token, config.jwtSecret) as jwt.JwtPayload;
+    } catch {
+      res.status(400).json({ success: false, error: 'Invalid or expired token' });
+      return;
+    }
+
+    // Return only non-secret metadata fields
+    res.json({
+      success: true,
+      data: {
+        sub: payload.sub,
+        role: payload.role,
+        iat: payload.iat,
+        exp: payload.exp,
+      },
+    });
   } catch (err) {
     next(err);
   }
