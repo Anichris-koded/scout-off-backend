@@ -20,6 +20,11 @@ const TIER_META: Record<ProgressLevel, { tierName: string; tierDescription: stri
   },
 };
 
-export function getTierMeta(level: ProgressLevel): { tierName: string; tierDescription: string } {
-  return TIER_META[level];
+const FALLBACK_TIER = {
+  tierName: 'tier.unknown.name',
+  tierDescription: 'tier.unknown.description',
+};
+
+export function getTierMeta(level: number): { tierName: string; tierDescription: string } {
+  return TIER_META[level as ProgressLevel] ?? FALLBACK_TIER;
 }

@@ -7,9 +7,29 @@ import { ApiResponse } from '../types';
 export async function getSubscription(req: Request, res: Response, next: NextFunction) {
   try {
     const { wallet } = req.params;
+    if ((req as any).account !== wallet) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
     const subs = getEvents('scout_subscribed').filter((e) => e.payload.scout === wallet);
     const latest = subs.at(-1);
-    res.json({ success: true, data: latest?.payload ?? null });
+    if (!latest) {
+      res.json({ success: true, data: { active: false, tier: null, expiresAt: null, remainingDays: 0 } });
+      return;
+    }
+    const expiresAt = latest.payload.subscriptionExpiry as number;
+    const now = Math.floor(Date.now() / 1000);
+    const active = expiresAt > now;
+    const remainingDays = active ? Math.ceil((expiresAt - now) / 86400) : 0;
+    res.json({
+      success: true,
+      data: {
+        active,
+        tier: (latest.payload.tier as string) ?? 'basic',
+        expiresAt,
+        remainingDays,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -19,8 +39,19 @@ export async function getSubscription(req: Request, res: Response, next: NextFun
 export async function getUnlockedContacts(req: Request, res: Response, next: NextFunction) {
   try {
     const { wallet } = req.params;
+    if ((req as any).account !== wallet) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
     const contacts = getEvents('contact_unlocked').filter((e) => e.payload.scout === wallet);
-    res.json({ success: true, data: contacts.map((e) => e.payload) });
+    res.json({
+      success: true,
+      data: contacts.map((e) => ({
+        playerId: e.payload.playerId as string,
+        contact_status: 'unlocked',
+        unlockedAt: e.payload.unlockedAt as number,
+      })),
+    });
   } catch (err) {
     next(err);
   }

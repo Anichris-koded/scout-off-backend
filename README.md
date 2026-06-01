@@ -322,6 +322,84 @@ On startup the server will:
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions.
 
+## Health Endpoints
+
+The backend exposes two health check endpoints for monitoring and orchestration probes.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | — | Liveness check — always returns `200 ok` with optional Stellar RPC status |
+| `GET` | `/ready` | — | Readiness probe — returns `200` when all dependencies are reachable, `503` when degraded |
+
+### GET /health
+
+Liveness check. Returns `200` as long as the process is running.
+
+Optionally includes a Stellar RPC connectivity check, controlled by the `STELLAR_HEALTH_CHECK_ENABLED` env var (default: `true`).
+
+**Middleware module:** `src/services/stellar.ts` (`stellarHealth`)
+
+**Example response (healthy):**
+```json
+{
+  "status": "ok",
+  "healthStatus": {
+    "stellar": "ok"
+  }
+}
+```
+
+**Example response (Stellar disabled):**
+```json
+{
+  "status": "ok",
+  "healthStatus": {
+    "stellar": "disabled"
+  }
+}
+```
+
+> **Monitoring note:** Use `/health` as a liveness probe. A non-`200` response indicates the process has crashed and should be restarted.
+
+### GET /ready
+
+Readiness probe. Returns `200` when all service dependencies are reachable. Returns `503` when any dependency is unavailable.
+
+Currently checks: **IPFS (Pinata)** storage connectivity.
+
+**Middleware module:** `src/services/ipfs.ts` (`checkHealth`)
+
+**Example response (ready):**
+```json
+{
+  "status": "ok",
+  "services": {
+    "ipfs": "ok"
+  }
+}
+```
+
+**Example response (degraded):**
+```json
+{
+  "status": "degraded",
+  "services": {
+    "ipfs": "unavailable"
+  }
+}
+```
+
+> **Monitoring note:** Use `/ready` as a readiness probe. A `503` response means the service should be temporarily removed from the load balancer until dependencies recover.
+
+### Dependencies
+
+| Endpoint | Dependency | Stub / Module |
+|----------|-----------|---------------|
+| `/health` | Stellar RPC (`SOROBAN_RPC_URL`) | `src/services/stellar.ts` — `stellarHealth()` |
+| `/ready` | IPFS / Pinata (`PINATA_API_KEY`) | `src/services/ipfs.ts` — `checkHealth()` |
+
+Both dependency checks are stubbed in tests — see `tests/routes/health.test.ts`.
+
 ## How It Works
 
 1. **Player Onboarding**

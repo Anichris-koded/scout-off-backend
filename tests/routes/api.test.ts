@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { logger } from '../../src/utils/logger';
 import app from '../../src/index';
 
 describe('GET /health', () => {
@@ -31,6 +32,51 @@ describe('GET /api/players', () => {
   it('rejects invalid minTier with 400', async () => {
     const res = await request(app).get('/api/players?minTier=99');
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/players/register', () => {
+  const validPlayer = {
+    wallet: 'G'.repeat(56),
+    position: 'striker',
+    region: 'europe',
+    metadataUri: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+  };
+
+  it('rejects invalid metadataUri values with 400', async () => {
+    const res = await request(app)
+      .post('/api/players/register')
+      .send({ ...validPlayer, metadataUri: 'invalid-cid' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('accepts registration payloads with valid metadataUri', async () => {
+    const res = await request(app)
+      .post('/api/players/register')
+      .send(validPlayer);
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.metadataUri).toBe(validPlayer.metadataUri);
+  });
+});
+
+describe('POST /api/validators/milestone', () => {
+  it('rejects invalid milestone submissions and logs a correlation ID', async () => {
+    const token = await getValidatorToken();
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    const res = await request(app)
+      .post('/api/validators/milestone')
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-correlation-id', 'test-corr-id')
+      .send({ playerId: 'player-1', milestoneType: 'invalid_type', evidenceUri: 'ipfs://QmTest' });
+
+    expect(res.status).toBe(400);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('correlationId=test-corr-id'));
+    warnSpy.mockRestore();
   });
 });
 
