@@ -1,17 +1,26 @@
 import { sanitizeInput } from '../utils/sanitizer';
-import { sanitizeInput } from '../utils/sanitizer';
 import { z } from 'zod';
 import { pinJson, gatewayUrl } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
 import { invalidatePlayerCache } from '../services/cache';
-import { ApiResponse } from '../types';
+import { ApiResponse, ProgressLevel } from '../types';
+import { getTierMeta } from '../utils/tier';
 
-export const registerSchema = z.object({
+const baseRegistrationSchema = z.object({
   wallet: z.string().min(56).max(56),
   position: z.string().min(1),
   region: z.string().min(1),
-  metadata: z.record(z.unknown()),
 });
+
+const metadataSchema = z.record(z.unknown());
+const metadataUriSchema = z.string().regex(CID_REGEX, 'metadataUri must be a valid CID');
+
+export const registerSchema = z.union([
+  baseRegistrationSchema.extend({ metadata: metadataSchema }),
+  baseRegistrationSchema.extend({ metadataUri: metadataUriSchema }),
+]);
+
+export type RegisterPlayerRequest = z.infer<typeof registerSchema>;
 
 export const filterSchema = z.object({
   region: z.string().optional(),
@@ -24,15 +33,30 @@ export const filterSchema = z.object({
 /** POST /api/players/register */
 export async function registerPlayer(req: Request, res: Response, next: NextFunction) {
   try {
-    const { wallet, position, region, metadata } = registerSchema.parse(req.body);
-    const sanitizedPosition = sanitizeInput(position);
-    const sanitizedRegion = sanitizeInput(region);
-    const cid = await pinJson({ wallet, position: sanitizedPosition, region: sanitizedRegion, ...metadata });
+    const parsed = registerSchema.parse(req.body);
+    const sanitizedPosition = sanitizeInput(parsed.position);
+    const sanitizedRegion = sanitizeInput(parsed.region);
+    const metadataUri = 'metadataUri' in parsed
+      ? parsed.metadataUri
+      : await pinJson({
+          wallet: parsed.wallet,
+          position: sanitizedPosition,
+          region: sanitizedRegion,
+          ...parsed.metadata,
+        });
+
     // Invalidate player search cache so new profile appears in results
     invalidatePlayerCache();
+    await dispatchEventWebhook('player_registered', {
+      wallet: parsed.wallet,
+      position: sanitizedPosition,
+      region: sanitizedRegion,
+      metadataUri,
+    });
+
     const body: ApiResponse<{ metadataUri: string; gatewayUrl: string }> = {
       success: true,
-      data: { metadataUri: cid, gatewayUrl: gatewayUrl(cid) },
+      data: { metadataUri, gatewayUrl: gatewayUrl(metadataUri) },
     };
     res.status(201).json(body);
   } catch (err) {
@@ -52,7 +76,7 @@ export async function getPlayer(req: Request, res: Response, next: NextFunction)
       return;
     }
     const payload = events[0].payload;
-    const level = (Number(payload.progress_level ?? 0) as ProgressLevel);
+    const level = Number(payload.progress_level ?? 0);
     const { tierName, tierDescription } = getTierMeta(level);
     res.json({ success: true, data: { ...payload, tierName, tierDescription } });
   } catch (err) {
@@ -63,7 +87,12 @@ export async function getPlayer(req: Request, res: Response, next: NextFunction)
 /** GET /api/players?region=&position=&minTier= */
 export async function filterPlayers(req: Request, res: Response, next: NextFunction) {
   try {
-    const { region, position, minTier, page, pageSize } = filterSchema.parse(req.query);
+    const tierResult = validateMinTier(req.query.minTier);
+    if (!tierResult.valid) {
+      res.status(400).json({ success: false, error: tierResult.error });
+      return;
+    }
+    const { region, position, page, pageSize } = filterSchema.parse(req.query);
     const sanitizedRegion = region ? sanitizeInput(region) : undefined;
     const sanitizedPosition = position ? sanitizeInput(position) : undefined;
     let players = getEvents('player_registered').map((e) => e.payload);
@@ -71,8 +100,30 @@ export async function filterPlayers(req: Request, res: Response, next: NextFunct
     if (sanitizedPosition) players = players.filter((p) => p.position === sanitizedPosition);
     if (minTier !== undefined)
       players = players.filter((p) => Number(p.progress_level) >= minTier);
+    const total = players.length;
+    const pages = Math.ceil(total / pageSize);
     const paginated = players.slice((page - 1) * pageSize, page * pageSize);
-    res.json({ success: true, data: paginated, total: players.length, page, pageSize });
+    res.json({ success: true, data: paginated, total, page, pageSize, pages });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PUT /api/players/:playerId
+ * Required permissions: caller must be the profile owner (JWT sub === playerId).
+ * Stub — returns 202 Accepted until on-chain update is wired.
+ */
+export const updatePlayerSchema = z.object({
+  position: z.string().min(1).optional(),
+  region: z.string().min(1).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export async function updatePlayer(req: Request, res: Response, next: NextFunction) {
+  try {
+    updatePlayerSchema.parse(req.body);
+    res.status(202).json({ success: true, message: 'Profile update accepted' });
   } catch (err) {
     next(err);
   }

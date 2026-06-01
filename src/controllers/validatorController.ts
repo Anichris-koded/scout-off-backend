@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pinJson } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
 import { invalidateMilestoneCache } from '../services/cache';
+import { PlayerMilestone } from '../types';
 
 export const milestoneSchema = z.object({
   playerId: z.string().min(1),
@@ -16,13 +17,23 @@ export const pendingQuerySchema = z.object({
 });
 
 /** POST /api/validators/milestone */
+function getCorrelationId(req: Request): string {
+  return String(req.headers['x-correlation-id'] ?? req.headers['correlation-id'] ?? 'none');
+}
+
 export async function submitMilestoneEvidence(req: Request, res: Response, next: NextFunction) {
   try {
     const { playerId, milestoneType, evidenceUri } = milestoneSchema.parse(req.body);
     const evidenceCid = await pinJson({ playerId, milestoneType, evidenceUri });
     // Invalidate milestone + player cache so updated progress tier is reflected
     invalidateMilestoneCache(playerId);
-    console.log(`[validator] evidence pinned – playerId=${playerId} cid=${evidenceCid}`);
+
+    const validatorWallet = (req as any).account ?? 'unknown';
+    const correlationId = getCorrelationId(req);
+    logger.info(
+      `[validator] action=submit_milestone validator=${validatorWallet} playerId=${playerId} milestoneType=${milestoneType} evidenceCid=${evidenceCid} correlationId=${correlationId}`
+    );
+
     res.status(201).json({ success: true, data: { evidenceCid } });
   } catch (err) {
     next(err);
