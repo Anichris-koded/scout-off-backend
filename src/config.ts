@@ -1,5 +1,18 @@
 import dotenv from 'dotenv';
+import { execSync } from 'child_process';
+import path from 'path';
 dotenv.config();
+
+// Validate required env vars and NODE_ENV before the app starts.
+// Exits with a descriptive error if any required variable is missing.
+try {
+  execSync(`node "${path.resolve(__dirname, '../scripts/validate-env.js')}" --runtime`, {
+    stdio: 'inherit',
+    env: process.env,
+  });
+} catch {
+  process.exit(1);
+}
 
 function required(key: string): string {
   const value = process.env[key];
