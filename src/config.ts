@@ -2,6 +2,12 @@ import dotenv from 'dotenv';
 import { z } from 'zod';
 dotenv.config();
 
+function required(key: string): string {
+  const val = process.env[key];
+  if (!val) throw new Error(`Missing required env var: ${key}`);
+  return val;
+}
+
 const ConfigSchema = z.object({
   port: z.coerce.number().default(4000),
   network: z.enum(['testnet', 'mainnet']).default('testnet'),
@@ -46,7 +52,6 @@ const config = {
     xFrameOptions: process.env.SECURITY_X_FRAME_OPTIONS ?? 'DENY',
     referrerPolicy: process.env.SECURITY_REFERRER_POLICY ?? 'no-referrer',
   },
-  logLevel: (process.env.LOG_LEVEL ?? 'info') as 'debug' | 'info' | 'warn' | 'error',
   webhook: {
     enabled: process.env.WEBHOOK_ENABLED === 'true',
     url: process.env.WEBHOOK_URL ?? ''
