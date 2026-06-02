@@ -64,9 +64,9 @@ const config = {
     url: process.env.WEBHOOK_URL ?? ''
   },
   rateLimit: {
-    enabled: process.env.RATE_LIMIT_ENABLED === 'true',
+    enabled: process.env.RATE_LIMIT_ENABLED !== 'false',
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? '60000', 10),
-    max: parseInt(process.env.RATE_LIMIT_MAX ?? '60', 10),
+    max: parseInt(process.env.RATE_LIMIT_MAX ?? (process.env.NODE_ENV === 'test' ? '1000' : '60'), 10),
   },
   bodyLimit: {
     // Maximum JSON payload size (default: 1MB)

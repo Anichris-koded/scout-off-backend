@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import config from '../config';
 
 interface RateLimitOptions {
   windowMs?: number; // time window in ms (default: 60_000)
@@ -15,6 +16,10 @@ export function rateLimit(options: RateLimitOptions = {}) {
   const hits = new Map<string, { count: number; resetAt: number }>();
 
   return (req: Request, res: Response, next: NextFunction): void => {
+    if (!config.rateLimit.enabled) {
+      next();
+      return;
+    }
     const ip = req.ip ?? 'unknown';
     const now = Date.now();
     const entry = hits.get(ip);

@@ -45,8 +45,11 @@ export function requireRole(role: string) {
       sendUnauthorized(res, 'Missing auth token');
       return;
     }
+
     try {
-      const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
+      const token = header.slice(7);
+      const payload = jwt.verify(token, config.jwtSecret) as AuthPayload;
+      
       if (payload.role !== role) {
         console.warn({
           method: req.method,
@@ -58,6 +61,7 @@ export function requireRole(role: string) {
         sendForbidden(res, 'Insufficient permissions', { requiredRole: role, providedRole: payload.role });
         return;
       }
+
       (req as any).account = payload.sub;
       (req as any).role = payload.role;
       next();

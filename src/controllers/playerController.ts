@@ -1,3 +1,4 @@
+import { Request, Response, NextFunction } from 'express';
 import { sanitizeInput } from '../utils/sanitizer';
 import { z } from 'zod';
 import { CID_REGEX } from '../utils/cidValidator';
@@ -6,6 +7,11 @@ import { getEvents } from '../services/indexer';
 import { invalidatePlayerCache } from '../services/cache';
 import { ApiResponse, ProgressLevel } from '../types';
 import { getTierMeta } from '../utils/tier';
+import { validateMinTier } from '../utils/minTierValidator';
+import { normalizePosition } from '../utils/positionAliases';
+import { dispatchEventWebhook } from '../services/webhooks';
+
+const CID_REGEX = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
 
 const baseRegistrationSchema = z.object({
   wallet: z.string().min(56).max(56),
@@ -93,6 +99,7 @@ export async function filterPlayers(req: Request, res: Response, next: NextFunct
       res.status(400).json({ success: false, error: tierResult.error });
       return;
     }
+    const minTier = tierResult.tier;
     const { region, position, page, pageSize } = filterSchema.parse(req.query);
     const sanitizedRegion = region ? sanitizeInput(region) : undefined;
     const sanitizedPosition = position ? sanitizeInput(position) : undefined;
