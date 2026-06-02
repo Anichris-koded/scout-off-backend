@@ -1,6 +1,21 @@
 import request from 'supertest';
 import { logger } from '../../src/utils/logger';
-import app from '../../src/index';
+import app from '../../src/app';
+import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
+
+jest.mock('../../src/services/ipfs', () => ({
+  pinJson: jest.fn().mockResolvedValue('QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64'),
+  checkHealth: jest.fn().mockResolvedValue(undefined),
+  gatewayUrl: jest.fn((cid) => `https://gateway.pinata.cloud/ipfs/${cid}`),
+}));
+
+jest.mock('../../src/services/indexer', () => ({
+  getEvents: jest.fn().mockReturnValue([]),
+}));
+
+jest.mock('../../src/services/webhooks', () => ({
+  dispatchEventWebhook: jest.fn().mockResolvedValue(undefined),
+}));
 
 describe('GET /health', () => {
   it('returns 200 ok', async () => {
@@ -82,7 +97,6 @@ describe('POST /api/validators/milestone', () => {
 
 describe('GET /auth/challenge', () => {
   it('returns challenge XDR for a valid Stellar account', async () => {
-    const { Keypair } = await import('@stellar/stellar-sdk');
     const account = Keypair.random().publicKey();
     const res = await request(app).get(`/auth/challenge?account=${account}`);
     expect(res.status).toBe(200);
@@ -104,7 +118,6 @@ describe('GET /auth/challenge', () => {
 
 describe('POST /auth/token', () => {
   it('returns JWT after client signs the challenge', async () => {
-    const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
     const clientKeypair = Keypair.random();
     const challengeRes = await request(app).get(
       `/auth/challenge?account=${clientKeypair.publicKey()}`
@@ -123,7 +136,6 @@ describe('POST /auth/token', () => {
   });
 
   it('returns JWT with validator role when role is specified', async () => {
-    const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
     const clientKeypair = Keypair.random();
     const challengeRes = await request(app).get(
       `/auth/challenge?account=${clientKeypair.publicKey()}`
@@ -141,7 +153,6 @@ describe('POST /auth/token', () => {
   });
 
   it('returns 401 for unsigned challenge', async () => {
-    const { Keypair } = await import('@stellar/stellar-sdk');
     const clientKeypair = Keypair.random();
     const challengeRes = await request(app).get(
       `/auth/challenge?account=${clientKeypair.publicKey()}`
@@ -162,7 +173,6 @@ describe('POST /auth/token', () => {
 });
 
 async function getValidatorToken(): Promise<string> {
-  const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
   const kp = Keypair.random();
   const challengeRes = await request(app).get(`/auth/challenge?account=${kp.publicKey()}`);
   const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
@@ -174,7 +184,6 @@ async function getValidatorToken(): Promise<string> {
 }
 
 async function getPlayerToken(): Promise<string> {
-  const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
   const kp = Keypair.random();
   const challengeRes = await request(app).get(`/auth/challenge?account=${kp.publicKey()}`);
   const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
@@ -186,7 +195,6 @@ async function getPlayerToken(): Promise<string> {
 }
 
 async function getAdminToken(): Promise<string> {
-  const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
   const kp = Keypair.random();
   const challengeRes = await request(app).get(`/auth/challenge?account=${kp.publicKey()}`);
   const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);

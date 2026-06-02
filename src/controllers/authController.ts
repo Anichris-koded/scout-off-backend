@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { Keypair } from '@stellar/stellar-sdk';
 import { buildChallenge, verifyAndIssueToken, extractAccount } from '../services/sep10';
+import { logger } from '../utils/logger';
+import { extractClientIp } from '../utils/ipExtractor';
 import config from '../config';
 
 const TOKEN_TTL_SECONDS = 86400;
@@ -21,8 +23,18 @@ const tokenSchema = z.object({
 /** GET /auth/challenge?account=G... */
 export function getChallenge(req: Request, res: Response, next: NextFunction): void {
   try {
-    const { account } = challengeSchema.parse(req.query);
-    const challenge = buildChallenge(account);
+    const parsed = challengeSchema.safeParse(req.query);
+    if (!parsed.success) {
+      logger.warn('[auth] failed_challenge_request', {
+        correlationId: req.correlationId,
+        origin: extractClientIp(req),
+        attemptedAccount: (req.query.account as string) ?? null,
+        reason: parsed.error.errors[0]?.message,
+      });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request' });
+      return;
+    }
+    const challenge = buildChallenge(parsed.data.account);
     res.json({ challenge, networkPassphrase: config.networkPassphrase });
   } catch (err) {
     next(err);
@@ -32,7 +44,17 @@ export function getChallenge(req: Request, res: Response, next: NextFunction): v
 /** POST /auth/token  { transaction: "<signed XDR>", role?: "validator" } */
 export function postToken(req: Request, res: Response, next: NextFunction): void {
   try {
-    const { transaction, role } = tokenSchema.parse(req.body);
+    const parsed = tokenSchema.safeParse(req.body);
+    if (!parsed.success) {
+      logger.warn('[auth] failed_token_request invalid_body', {
+        correlationId: req.correlationId,
+        origin: extractClientIp(req),
+        reason: parsed.error.errors[0]?.message,
+      });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request' });
+      return;
+    }
+    const { transaction, role } = parsed.data;
     // Seed admin: if the authenticated wallet matches ADMIN_WALLET, always issue admin role
     const candidate = extractAccount(transaction);
     const effectiveRole =
@@ -45,6 +67,14 @@ export function postToken(req: Request, res: Response, next: NextFunction): void
       err.message === 'Invalid challenge signature' ||
       err.message === 'Missing source account in challenge'
     )) {
+      let attemptedWallet: string | null = null;
+      try { attemptedWallet = extractAccount((req.body as any).transaction); } catch { /* not extractable */ }
+      logger.warn('[auth] failed_token_exchange', {
+        correlationId: req.correlationId,
+        origin: extractClientIp(req),
+        attemptedWallet,
+        reason: err.message,
+      });
       res.status(401).json({ success: false, error: err.message });
       return;
     }

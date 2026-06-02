@@ -5,6 +5,8 @@ export interface AuditEvent {
   adminWallet: string;
   queryParams: Record<string, unknown>;
   timestamp: string;
+  /** Optional: contract action name for admin smart contract interactions (e.g. 'pause_contract') */
+  contractAction?: string;
 }
 
 /**

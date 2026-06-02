@@ -1,14 +1,18 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
+import { logger } from '../utils/logger';
 import { pinJson } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
 import { invalidateMilestoneCache } from '../services/cache';
 import { PlayerMilestone } from '../types';
+import { logger } from '../utils/logger';
+
+import { CID_REGEX } from '../utils/cidValidator';
 
 export const milestoneSchema = z.object({
   playerId: z.string().min(1),
   milestoneType: z.enum(['identity', 'performance', 'trial_offer']),
-  evidenceUri: z.string().min(1),
+  evidenceUri: z.string().regex(CID_REGEX, 'evidenceUri must be a valid IPFS CID'),
 });
 
 export const pendingQuerySchema = z.object({
@@ -18,7 +22,7 @@ export const pendingQuerySchema = z.object({
 
 /** POST /api/validators/milestone */
 function getCorrelationId(req: Request): string {
-  return String(req.headers['x-correlation-id'] ?? req.headers['correlation-id'] ?? 'none');
+  return String(req.headers?.['x-correlation-id'] ?? req.headers?.['correlation-id'] ?? 'none');
 }
 
 export async function submitMilestoneEvidence(req: Request, res: Response, next: NextFunction) {
@@ -33,6 +37,8 @@ export async function submitMilestoneEvidence(req: Request, res: Response, next:
     logger.info(
       `[validator] action=submit_milestone validator=${validatorWallet} playerId=${playerId} milestoneType=${milestoneType} evidenceCid=${evidenceCid} correlationId=${correlationId}`
     );
+
+    recordAudit(validatorWallet, 'milestone_submitted', { playerId, milestoneType, evidenceCid }, `correlationId=${correlationId}`);
 
     res.status(201).json({ success: true, data: { evidenceCid } });
   } catch (err) {
@@ -57,6 +63,10 @@ export async function getPendingMilestones(req: Request, res: Response, next: Ne
       submittedAt: m.created_at as number || Math.floor(Date.now() / 1000),
       evidenceUri: m.evidence_uri as string || m.evidenceUri as string || '',
     }));
+
+    const validatorWallet = (req as any).account ?? 'unknown';
+    recordAudit(validatorWallet, 'milestone_approved', { region: region ?? null, playerId: playerId ?? null, pendingCount: milestones.length }, 'pending milestones viewed');
+
     res.json({ success: true, data: milestones });
   } catch (err) {
     next(err);

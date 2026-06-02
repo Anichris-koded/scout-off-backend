@@ -19,6 +19,7 @@ Stellar is the backbone: sub-cent transaction fees mean a scout in Europe can pa
 - **Pay-to-Contact**: Scouts pay micro-fees in XLM or a platform token to unlock premium data or initiate contact
 - **Subscription Model**: Scouts can hold an active subscription for unlimited browsing within a tier
 - **SEP-10 Auth**: Players and scouts log in securely with a Stellar wallet (Freighter, Albedo, or Lobstr)
+- **Auth docs**: See `docs/auth.md` for SEP-10 challenge flow, JWT lifecycle, token refresh, and example requests.
 - **Decentralized Storage**: Highlight reels and photos stored on IPFS; content hashes saved on-chain in the player's profile
 
 ## Architecture
@@ -323,6 +324,84 @@ On startup the server will:
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions.
 
+## Backend Local Development
+
+This section covers everything you need to get the backend running locally.
+
+### Prerequisites
+
+- Node.js ≥ 18
+- npm ≥ 9
+
+### Install Dependencies
+
+```bash
+npm install
+```
+
+### Environment Setup
+
+Copy the example env file and fill in the required values:
+
+```bash
+cp .env.example .env
+```
+
+Required environment variables (the server will fail to start without these):
+
+| Variable | Description |
+|----------|-------------|
+| `CONTRACT_ID` | Deployed ScoutOff Soroban contract address |
+| `JWT_SECRET` | Secret used to sign SEP-10 JWT tokens |
+
+Optional but commonly set:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `4000` | Backend API port |
+| `HORIZON_URL` | Stellar testnet | Stellar Horizon endpoint |
+| `SOROBAN_RPC_URL` | Stellar testnet | Soroban RPC endpoint |
+| `PINATA_API_KEY` / `PINATA_SECRET` | — | IPFS upload credentials |
+| `DB_PATH` | `scout-off.db` | SQLite database file path |
+| `LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+
+See [.env.example](.env.example) for the full list of supported variables.
+
+### Run (Development)
+
+```bash
+npm run dev
+```
+
+Hot-reload is enabled via `ts-node-dev`. The server restarts automatically on file changes.
+
+### Build
+
+```bash
+npm run build
+```
+
+Compiles TypeScript to `dist/`. Run the compiled output with `npm start`.
+
+### Run Tests
+
+```bash
+npm test
+```
+
+Runs the full backend test suite with Jest. Tests are located in the [`tests/`](tests/) directory, organised by layer:
+
+- [`tests/middleware/`](tests/middleware/) — middleware unit tests (auth, correlationId, errorHandler, etc.)
+- [`tests/routes/`](tests/routes/) — route integration tests (health, scout, admin, etc.)
+- [`tests/utils/`](tests/utils/) — utility unit tests (CID validator, tier, logger, etc.)
+- [`tests/services/`](tests/services/) — service unit tests (IPFS, indexer, SEP-10, etc.)
+
+### Lint
+
+```bash
+npm run lint
+```
+
 ## Health Endpoints
 
 The backend exposes two health check endpoints for monitoring and orchestration probes.
@@ -401,6 +480,18 @@ Currently checks: **IPFS (Pinata)** storage connectivity.
 
 Both dependency checks are stubbed in tests — see `tests/routes/health.test.ts`.
 
+### IPFS Service Dependency
+
+The backend uses [Pinata](https://pinata.cloud) to pin player metadata and milestone evidence to IPFS. The service is **optional in local development** — when `PINATA_API_KEY` and `PINATA_SECRET` are not set, `pinJson`, `pinFile`, and `checkHealth` fall back to deterministic stub behaviour and log a `[warn]` on each call. No network requests are made.
+
+In **production** (`NODE_ENV=production`) the same functions throw immediately if the credentials are absent, preventing silent data loss.
+
+| Env var | Required | Description |
+|---------|----------|-------------|
+| `PINATA_API_KEY` | production only | Pinata API key |
+| `PINATA_SECRET` | production only | Pinata secret key |
+| `PINATA_GATEWAY` | no | Public gateway base URL (default: `https://gateway.pinata.cloud`) |
+
 ## How It Works
 
 1. **Player Onboarding**
@@ -448,6 +539,7 @@ Both dependency checks are stubbed in tests — see `tests/routes/health.test.ts
 | `DB_PATH`                 | SQLite database file path (default: `scout-off.db`) |
 | `LOG_LEVEL`               | Log verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
 | `STELLAR_HEALTH_CHECK_ENABLED` | Include Stellar RPC in `/health` response (default: `true`; set `false` to disable in staging) |
+| `JSON_PAYLOAD_LIMIT`      | Maximum JSON request body size (default: `1mb`); requests exceeding limit return HTTP 413 |
 
 ## Testing
 
@@ -547,10 +639,176 @@ MIT
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! This section provides guidance for backend contributors and issue filing best practices.
 
-Quick checklist:
-- All contract tests pass: `cargo test`
-- All backend tests pass: `npm run test`
-- New features include tests and updated documentation
-- Milestone verification logic changes require explicit review
+### Getting Started
+
+1. **Onboarding via Drips Funding Wave Program**  
+   ScoutOff is part of the Drips funding wave program. If you're a contributor interested in joining, visit [drips.network](https://drips.network) to learn about opportunities and register your interest. Funded contributors receive support through the Drips platform.
+
+2. **Fork and Set Up**
+   ```bash
+   git clone https://github.com/your-org/scout-off.git
+   cd scout-off-backend
+   npm install
+   npm run dev
+   ```
+
+3. **Pre-Contribution Checks**
+   - All contract tests pass: `cargo test`
+   - All backend tests pass: `npm run test`
+   - New features include tests and updated documentation
+   - Milestone verification logic changes require explicit review
+
+### Filing Backend Issues
+
+We track ~125 active issues across the ScoutOff platform. Use the guidelines below to help us prioritize and route your contribution efficiently.
+
+#### Issue Categories
+
+When filing an issue, select one of these categories (via GitHub labels):
+
+| Category        | Description                                           | Examples |
+|-----------------|-------------------------------------------------------|----------|
+| **bug**         | Unintended behavior or crashes in existing features   | IPFS timeout on upload; SEP-10 auth fails |
+| **feature**     | New capability or enhancement to existing behavior    | Add player region filter; support trial offer logging |
+| **performance** | Optimization or speed improvements                    | Cache layer for milestone queries; reduce indexer latency |
+| **documentation** | Updates to README, API docs, or code comments       | Clarify error codes; add SDK usage examples |
+| **refactor**    | Code restructuring without changing behavior          | Consolidate validation logic; reduce middleware complexity |
+| **infra**       | Deployment, CI/CD, or DevOps improvements            | GitHub Actions optimization; database migration tooling |
+| **security**    | Vulnerability fixes or hardening                      | Validate JSON inputs; rate limit on auth endpoints |
+| **test**        | Test coverage or reliability improvements            | Add contract edge case tests; improve test isolation |
+
+#### Priority Levels
+
+Priority is assigned by maintainers based on impact and timeline:
+
+| Priority | Severity | Timeline | Example |
+|----------|----------|----------|---------|
+| **P0** (Critical) | Blocks deployment or causes data loss | Fix immediately | Contract initialization fails; database corruption |
+| **P1** (High) | Affects core user flow or many users | Fix within sprint | Milestone approval broken; payment processing hangs |
+| **P2** (Medium) | Degrades experience but has workaround | Schedule next sprint | Scout search is slow; validator list stale |
+| **P3** (Low) | Nice-to-have or affects few users | Plan in backlog | Improve error message wording; refactor rarely-used module |
+
+#### How to File a High-Quality Issue
+
+1. **Check Existing Issues First**  
+   Search [GitHub Issues](https://github.com/your-org/scout-off/issues) to avoid duplicates.
+
+2. **Use a Clear Title**  
+   ✅ *"Auth token expires before subscription ends"*  
+   ❌ *"Bug with tokens"*
+
+3. **Provide Steps to Reproduce** (for bugs)  
+   ```
+   1. Create a scout account
+   2. Purchase a 30-day subscription via /api/scouts/subscribe
+   3. Wait 25 days
+   4. Call /api/scouts/:wallet/subscription
+   
+   Expected: subscription still active
+   Actual: returns 401 NotSubscribed
+   ```
+
+4. **Include Environment Context**  
+   - OS and Node version: `node -v && npm -v`
+   - Backend service versions: `npm list express @stellar/stellar-sdk`
+   - Relevant config (without secrets): `NETWORK=testnet`
+
+5. **Add Labels**  
+   Assign the issue category (e.g., `bug`, `feature`, `performance`) and any applicable priority you estimate. Maintainers will confirm priority.
+
+6. **Link Related Issues**  
+   If fixing this resolves another issue, mention it: *"Fixes #123"* or *"Related to #456"*.
+
+#### Issue Submission Template
+
+```markdown
+## Summary
+One sentence describing the issue.
+
+## Category
+[ ] Bug [ ] Feature [ ] Performance [ ] Documentation [ ] Refactor [ ] Infra [ ] Security [ ] Test
+
+## Priority (Estimated)
+[ ] P0 – Blocks deployment [ ] P1 – High impact [ ] P2 – Medium [ ] P3 – Low
+
+## Environment
+- Node: vX.Y.Z
+- Backend: [list key versions from package.json]
+- Network: [testnet/mainnet/local]
+
+## Description
+Detailed explanation of what you're reporting or proposing.
+
+## Steps (for bugs)
+1.
+2.
+3.
+
+## Expected vs. Actual (for bugs)
+- Expected: …
+- Actual: …
+
+## Proposed Solution (for features)
+How would you implement this?
+
+## Related Issues
+Fixes #XXX / Related to #YYY
+```
+
+### Contribution Workflow
+
+1. **Claim an Issue**  
+   Comment on the issue to indicate you're working on it. Maintainers will assign it to you.
+
+2. **Create a Feature Branch**  
+   ```bash
+   git checkout -b add-your-feature-description
+   ```
+
+3. **Make Changes and Test Locally**  
+   ```bash
+   npm run test           # Run backend tests
+   npm run lint           # Check code style
+   npm run dev            # Test manually
+   ```
+
+4. **Commit with Clear Messages**  
+   ```bash
+   git commit -m "fix: resolve auth token expiration bug
+
+   - Add expiry check in subscription validator
+   - Extend token TTL to match subscription period
+   - Add test case for 30-day subscription renewal
+   
+   Fixes #123"
+   ```
+
+5. **Push and Open a Pull Request**  
+   ```bash
+   git push origin add-your-feature-description
+   ```
+   Reference the issue in the PR description: *"Fixes #123"*
+
+6. **Review and Merge**  
+   - Maintainers review code and tests
+   - Address feedback in new commits (don't force-push)
+   - Once approved, your PR will be merged to `main`
+
+### Code Quality Standards
+
+- **Tests**: New features must include unit or integration tests
+- **Linting**: Run `npm run lint` and fix all warnings
+- **Types**: Use strict TypeScript; avoid `any` types where possible
+- **Documentation**: Update README if your changes affect user-facing behavior
+- **Git History**: Use atomic commits with meaningful messages
+
+### Getting Help
+
+- **Questions about an issue?** Comment on the GitHub issue
+- **Need design feedback?** Open a draft PR early
+- **Stuck debugging?** Reach out on [Stellar Discord](https://discord.gg/stellar) or file a help-wanted issue
+- **Contributing via Drips?** Visit the [Drips contributor portal](https://drips.network) for wave-specific guidance
+
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) for additional guidelines.
