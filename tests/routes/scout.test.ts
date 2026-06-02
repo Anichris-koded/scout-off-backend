@@ -10,8 +10,17 @@ jest.mock('../../src/services/indexer', () => ({
   normalizeEventId: jest.fn(),
 }));
 
+jest.mock('../../src/services/stellar', () => ({
+  submitContactPayment: jest.fn(),
+  PaymentError: class PaymentError extends Error {
+    constructor(public message: string, public code: string) { super(message); }
+  },
+}));
+
 import { getEvents } from '../../src/services/indexer';
+import { submitContactPayment } from '../../src/services/stellar';
 const mockGetEvents = getEvents as jest.Mock;
+const mockSubmitContactPayment = submitContactPayment as jest.Mock;
 
 function makeToken(wallet: string, role = 'scout'): string {
   return jwt.sign({ sub: wallet, role }, SECRET, { expiresIn: '1h' });
@@ -170,5 +179,42 @@ describe('GET /api/scouts/:wallet/contacts', () => {
     });
     expect(res.body.data[1].playerId).toBe('player-99');
     expect(res.body.data[1].contact_status).toBe('unlocked');
+  });
+});
+
+// ─── POST /api/scouts/:wallet/contacts/:playerId/unlock ───────────────────────
+
+describe('POST /api/scouts/:wallet/contacts/:playerId/unlock', () => {
+  const PLAYER_ID = 'player-123';
+
+  beforeEach(() => {
+    mockGetEvents.mockReset();
+    mockSubmitContactPayment.mockReset();
+  });
+
+  it('returns 401 when no token is provided', async () => {
+    const res = await request(app).post(`/api/scouts/${WALLET}/contacts/${PLAYER_ID}/unlock`);
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 when JWT wallet does not match path wallet', async () => {
+    const token = makeToken(OTHER);
+    const res = await request(app)
+      .post(`/api/scouts/${WALLET}/contacts/${PLAYER_ID}/unlock`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/wallet/i);
+  });
+
+  it('proceeds with unlock when JWT wallet matches path wallet', async () => {
+    mockSubmitContactPayment.mockResolvedValue({ txHash: 'abc123', fee: '1' });
+    const token = makeToken(WALLET);
+    const res = await request(app)
+      .post(`/api/scouts/${WALLET}/contacts/${PLAYER_ID}/unlock`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(mockSubmitContactPayment).toHaveBeenCalledWith(WALLET, PLAYER_ID);
   });
 });

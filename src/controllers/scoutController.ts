@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { getEvents } from '../services/indexer';
 import { submitContactPayment, PaymentError } from '../services/stellar';
 import { ApiResponse } from '../types';
+import { logger } from '../utils/logger';
 
 /** GET /api/scouts/:wallet/subscription */
 export async function getSubscription(req: Request, res: Response, next: NextFunction) {
@@ -65,6 +66,16 @@ export async function unlockContact(req: Request, res: Response, next: NextFunct
       res.status(400).json({ success: false, error: 'wallet and playerId are required' });
       return;
     }
+
+    // Verify the JWT subject matches the wallet in the path
+    if ((req as any).account !== wallet) {
+      logger.warn(`[scout] action=unlock_contact_denied scout=${wallet} playerId=${playerId} reason=wallet_mismatch`);
+      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
+      return;
+    }
+
+    logger.info(`[scout] action=unlock_contact_attempt scout=${wallet} playerId=${playerId}`);
+
     const result = await submitContactPayment(wallet, playerId);
     res.json({ success: true, data: result });
   } catch (err) {
