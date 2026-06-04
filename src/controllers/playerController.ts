@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { CID_REGEX } from '../utils/cidValidator';
 import { pinJson, gatewayUrl } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
+import { queryMilestones } from '../services/stellar';
 import { invalidatePlayerCache } from '../services/cache';
 import { ApiResponse, ProgressLevel } from '../types';
 import { getTierMeta } from '../utils/tier';
@@ -148,10 +149,14 @@ export async function updatePlayer(req: Request, res: Response, next: NextFuncti
 /** GET /api/players/:playerId/milestones */
 export async function getPlayerMilestones(req: Request, res: Response, next: NextFunction) {
   try {
-    const milestones = getEvents('milestone_approved').filter(
-      (e) => e.payload.player_id === req.params.playerId
+    const playerId = sanitizeInput(req.params.playerId);
+    // Fetch indexed (off-chain) events from the local event store
+    const indexedMilestones = getEvents('milestone_approved').filter(
+      (e) => e.payload.player_id === playerId
     );
-    res.json({ success: true, data: milestones });
+    // Fetch on-chain milestones from the Soroban contract stub
+    const onChainMilestones = await queryMilestones(playerId);
+    res.json({ success: true, data: { indexed: indexedMilestones, onChain: onChainMilestones } });
   } catch (err) {
     next(err);
   }

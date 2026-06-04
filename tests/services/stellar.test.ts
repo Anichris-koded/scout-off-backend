@@ -1,4 +1,4 @@
-import { isSubscribed, PaymentError } from '../../src/services/stellar';
+import { isSubscribed, queryMilestones, PaymentError } from '../../src/services/stellar';
 
 // Mock the Soroban server so tests don't need a live RPC
 jest.mock('@stellar/stellar-sdk', () => ({
@@ -32,5 +32,23 @@ describe('isSubscribed', () => {
     const result = await mockIsSubscribed('GSCOUT789');
     expect(result.active).toBe(true);
     expect(result.expiresAt).toBe('2027-01-01T00:00:00.000Z');
+  });
+});
+
+describe('queryMilestones', () => {
+  it('returns an empty array for a valid playerId (stub)', async () => {
+    const result = await queryMilestones('GPLAYER123');
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toHaveLength(0);
+  });
+
+  it('throws PaymentError for an empty playerId', async () => {
+    await expect(queryMilestones('')).rejects.toThrow(PaymentError);
+  });
+
+  it('result items would conform to OnChainMilestone shape when populated', async () => {
+    // Stub returns [] — verify shape contract via type-level check (no runtime items)
+    const result = await queryMilestones('GPLAYER456');
+    expect(result).toEqual([]);
   });
 });

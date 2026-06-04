@@ -1,29 +1,6 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-function required(key: string): string {
-  const val = process.env[key];
-  if (!val) throw new Error(`Missing required env var: ${key}`);
-  return val;
-}
-
-const ConfigSchema = z.object({
-  port: z.coerce.number().default(4000),
-  network: z.enum(['testnet', 'mainnet']).default('testnet'),
-  networkPassphrase: z.string().default('Test SDF Network ; September 2015'),
-  horizonUrl: z.string().url().default('https://horizon-testnet.stellar.org'),
-  sorobanRpcUrl: z.string().url().default('https://soroban-testnet.stellar.org'),
-  contractId: z.string().min(1),
-  jwtSecret: z.string().min(1),
-  pinata: z.object({
-    apiKey: z.string().default(''),
-    secret: z.string().default(''),
-    gateway: z.string().url().default('https://gateway.pinata.cloud'),
-  }),
-  platformFeeBps: z.coerce.number().default(500),
-  dbPath: z.string().default('scout-off.db'),
-});
-
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -31,6 +8,8 @@ function required(name: string): string {
   }
   return value;
 }
+
+const nodeEnv = process.env.NODE_ENV ?? 'development';
 
 const config = {
   nodeEnv,
