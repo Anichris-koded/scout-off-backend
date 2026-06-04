@@ -13,7 +13,7 @@ jest.mock('../../src/services/ipfs', () => ({
 }));
 
 import request from 'supertest';
-import app from '../../src/index';
+import app from '../../src/app';
 import * as ipfsService from '../../src/services/ipfs';
 
 const mockCheckHealth = ipfsService.checkHealth as jest.Mock;

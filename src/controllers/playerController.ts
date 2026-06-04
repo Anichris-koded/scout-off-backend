@@ -1,8 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { sanitizeInput } from '../utils/sanitizer';
 import { z } from 'zod';
+import { CID_REGEX } from '../utils/cidValidator';
 import { pinJson, gatewayUrl } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
+import { queryMilestones } from '../services/stellar';
 import { invalidatePlayerCache } from '../services/cache';
 import { ApiResponse, ProgressLevel } from '../types';
 import { getTierMeta } from '../utils/tier';
@@ -10,7 +12,7 @@ import { validateMinTier } from '../utils/minTierValidator';
 import { normalizePosition } from '../utils/positionAliases';
 import { dispatchEventWebhook } from '../services/webhooks';
 
-const CID_REGEX = /^(Qm[1-9A-HJ-NP-Za-km-z]{44,}|b[A-Za-z2-7]{58,}|[0-9a-z]{59,})$/;
+const CID_REGEX = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
 
 const baseRegistrationSchema = z.object({
   wallet: z.string().min(56).max(56),
@@ -149,21 +151,14 @@ const milestonesQuerySchema = z.object({
 /** GET /api/players/:playerId/milestones */
 export async function getPlayerMilestones(req: Request, res: Response, next: NextFunction) {
   try {
-    const parsed = milestonesQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.errors[0].message });
-      return;
-    }
-    const { sortBy, order } = parsed.data;
-    const milestones = getEvents('milestone_approved').filter(
-      (e) => e.payload.player_id === req.params.playerId
+    const playerId = sanitizeInput(req.params.playerId);
+    // Fetch indexed (off-chain) events from the local event store
+    const indexedMilestones = getEvents('milestone_approved').filter(
+      (e) => e.payload.player_id === playerId
     );
-    milestones.sort((a, b) => {
-      const aVal = Number(a.payload[sortBy] ?? a.payload.created_at ?? 0);
-      const bVal = Number(b.payload[sortBy] ?? b.payload.created_at ?? 0);
-      return order === 'asc' ? aVal - bVal : bVal - aVal;
-    });
-    res.json({ success: true, data: milestones });
+    // Fetch on-chain milestones from the Soroban contract stub
+    const onChainMilestones = await queryMilestones(playerId);
+    res.json({ success: true, data: { indexed: indexedMilestones, onChain: onChainMilestones } });
   } catch (err) {
     next(err);
   }

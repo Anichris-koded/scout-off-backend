@@ -14,11 +14,27 @@ export interface TierValidationResult {
  * Returns the parsed ProgressLevel on success, or an error message on failure.
  */
 export function validateMinTier(raw: unknown): TierValidationResult {
-  if (raw === undefined || raw === null || raw === '') {
+  const normalizedRaw = typeof raw === 'string' ? raw.trim() : raw;
+
+  if (normalizedRaw === undefined || normalizedRaw === null || normalizedRaw === '') {
     return { valid: true }; // optional param — absence is fine
   }
 
-  const num = Number(raw);
+  if (Array.isArray(normalizedRaw)) {
+    return {
+      valid: false,
+      error: `minTier must be an integer. Valid values: ${VALID_TIERS_STR}.`,
+    };
+  }
+
+  if (typeof normalizedRaw === 'string' && !/^-?\d+$/.test(normalizedRaw)) {
+    return {
+      valid: false,
+      error: `minTier must be an integer. Valid values: ${VALID_TIERS_STR}.`,
+    };
+  }
+
+  const num = Number(normalizedRaw);
 
   if (!Number.isInteger(num) || isNaN(num)) {
     return {

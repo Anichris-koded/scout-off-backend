@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { sendForbidden } from '../utils/authError';
 
 /**
  * Typed helper: returns true when the authenticated account matches the target id.
@@ -16,7 +17,7 @@ export function requireOwner(req: Request, res: Response, next: NextFunction): v
   const account = (req as any).account as string | undefined;
   const { playerId } = req.params;
   if (!isOwner(account, playerId)) {
-    res.status(403).json({ success: false, error: 'Forbidden: not the profile owner' });
+    sendForbidden(res, 'Forbidden: not the profile owner');
     return;
   }
   next();
