@@ -7,7 +7,7 @@ interface ValidationOptions {
 }
 
 function getCorrelationId(req: Request): string {
-  return String(req.headers['x-correlation-id'] ?? req.headers['correlation-id'] ?? 'none');
+  return String(req.headers?.['x-correlation-id'] ?? req.headers?.['correlation-id'] ?? 'none');
 }
 
 /**
@@ -31,6 +31,7 @@ export function validateBody<T>(schema: ZodSchema<T>, options?: ValidationOption
       res.status(400).json({
         success: false,
         error: result.error.errors[0]?.message ?? 'Invalid request body',
+        correlationId,
       });
       return;
     }
@@ -60,6 +61,7 @@ export function validateQuery<T>(schema: ZodSchema<T>, options?: ValidationOptio
       res.status(400).json({
         success: false,
         error: result.error.errors[0]?.message ?? 'Invalid query parameters',
+        correlationId,
       });
       return;
     }

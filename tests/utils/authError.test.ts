@@ -1,0 +1,72 @@
+import { Response } from 'express';
+import { sendUnauthorized, sendForbidden, AuthErrorPayload } from '../../src/utils/authError';
+
+function makeRes() {
+  const res = {
+    status: jest.fn().mockReturnThis(),
+    json: jest.fn().mockReturnThis(),
+  } as unknown as Response;
+  return res;
+}
+
+describe('sendUnauthorized', () => {
+  it('responds 401 with errorCode and message', () => {
+    const res = makeRes();
+    sendUnauthorized(res, 'Missing auth token');
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith<[AuthErrorPayload]>({
+      success: false,
+      errorCode: 9,
+      error: 'Missing auth token',
+    });
+  });
+
+  it('includes reason when provided', () => {
+    const res = makeRes();
+    sendUnauthorized(res, 'Missing auth token', { detail: 'no header' });
+    expect(res.json).toHaveBeenCalledWith<[AuthErrorPayload]>({
+      success: false,
+      errorCode: 9,
+      error: 'Missing auth token',
+      reason: { detail: 'no header' },
+    });
+  });
+
+  it('omits reason when not provided', () => {
+    const res = makeRes();
+    sendUnauthorized(res, 'Invalid or expired token');
+    const payload = (res.json as jest.Mock).mock.calls[0][0] as AuthErrorPayload;
+    expect('reason' in payload).toBe(false);
+  });
+});
+
+describe('sendForbidden', () => {
+  it('responds 403 with errorCode and message', () => {
+    const res = makeRes();
+    sendForbidden(res, 'Insufficient permissions');
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith<[AuthErrorPayload]>({
+      success: false,
+      errorCode: 9,
+      error: 'Insufficient permissions',
+    });
+  });
+
+  it('includes reason when provided', () => {
+    const res = makeRes();
+    sendForbidden(res, 'Insufficient permissions', { requiredRole: 'admin', providedRole: 'player' });
+    expect(res.json).toHaveBeenCalledWith<[AuthErrorPayload]>({
+      success: false,
+      errorCode: 9,
+      error: 'Insufficient permissions',
+      reason: { requiredRole: 'admin', providedRole: 'player' },
+    });
+  });
+
+  it('omits reason when not provided', () => {
+    const res = makeRes();
+    sendForbidden(res, 'Forbidden: not the profile owner');
+    const payload = (res.json as jest.Mock).mock.calls[0][0] as AuthErrorPayload;
+    expect('reason' in payload).toBe(false);
+  });
+});

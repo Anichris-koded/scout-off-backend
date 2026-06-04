@@ -1,5 +1,4 @@
-import express from 'express';
-import cors from 'cors';
+import app from './app';
 import config from './config';
 import authRoutes from './routes/auth';
 import playerRoutes from './routes/player';
@@ -7,8 +6,10 @@ import scoutRoutes from './routes/scout';
 import validatorRoutes from './routes/validator';
 import adminRoutes from './routes/admin';
 import { errorHandler } from './middleware/errorHandler';
+import { requestLogger } from './middleware/requestLogger';
 import { securityHeaders } from './middleware/securityHeaders';
 import { correlationId } from './middleware/correlationId';
+import { responseTime } from './middleware/responseTime';
 import { indexEvents } from './services/indexer';
 import { logger } from './utils/logger';
 import { stellarHealth } from './services/stellar';
@@ -20,7 +21,10 @@ app.use(cors());
 app.use(correlationId);
 app.use(securityHeaders);
 app.use(responseTime);
-app.use(express.json());
+// Configure Express body parser with JSON payload size limit
+// Returns 413 Payload Too Large if exceeded
+app.use(express.json({ limit: config.bodyLimit.json }));
+app.use(requestLogger);
 
 app.get('/health', async (_req, res) => {
   const healthStatus: Record<string, 'ok' | 'error' | 'disabled'> = {};
@@ -73,10 +77,15 @@ app.get('/health/readiness', async (_req, res) => {
 });
 
 app.use('/auth', authRoutes);
-app.use('/api/players', playerRoutes);
-app.use('/api/scouts', scoutRoutes);
-app.use('/api/validators', validatorRoutes);
-app.use('/api/admin', adminRoutes);
+
+// Mount API routes under both /api (backwards-compatible alias) and /api/v1
+const prefixes = [API_PREFIX, API_V1_PREFIX];
+for (const prefix of prefixes) {
+  app.use(`${prefix}/players`, playerRoutes);
+  app.use(`${prefix}/scouts`, scoutRoutes);
+  app.use(`${prefix}/validators`, validatorRoutes);
+  app.use(`${prefix}/admin`, adminRoutes);
+}
 
 app.use(errorHandler);
 
@@ -119,5 +128,3 @@ app.listen(config.port, () => {
   poll();
   setInterval(poll, 5_000);
 });
-
-export default app;

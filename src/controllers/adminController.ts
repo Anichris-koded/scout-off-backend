@@ -25,27 +25,31 @@ export async function getStats(req: Request, res: Response, next: NextFunction) 
   }
 }
 
-const eventsQuerySchema = z.object({
+const isoDateString = z
+  .string()
+  .refine((v) => !isNaN(Date.parse(v)), { message: 'Must be a valid ISO 8601 date string' })
+  .transform((v) => new Date(v));
+
+/** Exported so routes can apply validateQuery(adminDateRangeSchema) */
+export const adminDateRangeSchema = z.object({
+  startDate: isoDateString.optional(),
+  endDate: isoDateString.optional(),
   eventType: z.string().optional(),
-  startDate: z.coerce.number().optional(),
-  endDate: z.coerce.number().optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  offset: z.coerce.number().int().min(0).default(0),
-});
+}).refine(
+  (d) => !(d.startDate && d.endDate && d.startDate > d.endDate),
+  { message: 'startDate must not be after endDate' }
+);
 
 /** GET /api/admin/events */
 export async function getAllEvents(req: Request, res: Response, next: NextFunction) {
   try {
-    const parsed = eventsQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.errors[0].message });
-      return;
-    }
-    const { limit, offset } = parsed.data;
-    const all = getEvents() as unknown as EventRecord[];
-    const total = all.length;
-    const data = all.slice(offset, offset + limit);
-    res.json({ success: true, data, total, limit, offset });
+    const { startDate, endDate, eventType } = (req as any).query as z.infer<typeof adminDateRangeSchema>;
+    let events = getEvents() as unknown as EventRecord[];
+    if (eventType) events = events.filter((e: any) => e.type === eventType);
+    if (startDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) >= startDate!);
+    if (endDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) <= endDate!);
+    const body: ApiResponse<EventRecord[]> = { success: true, data: events };
+    res.json(body);
   } catch (err) {
     next(err);
   }
@@ -116,7 +120,13 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
 export async function pauseContract(req: Request, res: Response, next: NextFunction) {
   try {
     const adminWallet = (req as any).account as string;
-    console.info(`[admin] action=pause_contract admin=${adminWallet}`);
+    logAuditEvent({
+      action: 'contract_state_change',
+      adminWallet,
+      queryParams: {},
+      timestamp: new Date().toISOString(),
+      contractAction: 'pause_contract',
+    });
     // NOTE: Contract-level pause is simulated. Real invocation will call pause() on the Soroban contract.
     res.status(202).json({
       success: true,
@@ -135,7 +145,13 @@ export async function pauseContract(req: Request, res: Response, next: NextFunct
 export async function unpauseContract(req: Request, res: Response, next: NextFunction) {
   try {
     const adminWallet = (req as any).account as string;
-    console.info(`[admin] action=unpause_contract admin=${adminWallet}`);
+    logAuditEvent({
+      action: 'contract_state_change',
+      adminWallet,
+      queryParams: {},
+      timestamp: new Date().toISOString(),
+      contractAction: 'unpause_contract',
+    });
     // NOTE: Contract-level unpause is simulated. Real invocation will call unpause() on the Soroban contract.
     res.status(202).json({
       success: true,

@@ -1,6 +1,6 @@
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
-import app from '../../src/index';
+import app from '../../src/app';
 import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
 
 const SECRET = process.env.JWT_SECRET ?? 'test-secret';
