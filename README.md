@@ -659,6 +659,62 @@ Contributions are welcome! This section provides guidance for backend contributo
    - All backend tests pass: `npm run test`
    - New features include tests and updated documentation
    - Milestone verification logic changes require explicit review
+   - ⚠️ **Security audits pass**: `npm audit` (see [Security & Dependency Review](#security--dependency-review) below)
+
+### Security & Dependency Review
+
+**All contributors must audit third-party dependencies for security vulnerabilities before submitting pull requests.** Given ScoutOff's handling of blockchain payments and user authentication, supply chain security is critical.
+
+#### Regular Dependency Audits
+
+Run `npm audit` **before every commit** and before opening a PR:
+
+```bash
+npm audit
+```
+
+**Actions by vulnerability level:**
+
+| Severity | Action |
+|----------|--------|
+| **Critical / High** | Must fix before merging — block the PR if necessary |
+| **Moderate** | Fix unless infeasible; document trade-offs in PR |
+| **Low** | Document; fix in next sprint if no workaround exists |
+
+#### Dependency Update Checks
+
+When updating dependencies (especially those marked ⭐ below), verify:
+
+1. **No breaking changes** — Review the package's CHANGELOG
+2. **All tests pass** — Run `npm run test && npm run lint && npm audit`
+3. **Critical dependencies audited** — Pay special attention to:
+   - `express` — Web framework handling auth and requests
+   - `@stellar/stellar-sdk` — Direct blockchain interaction
+   - `jsonwebtoken` — JWT tokens for session management
+   - `better-sqlite3` — User data persistence
+   - `axios` / `node-fetch` — External API calls (IPFS, Stellar)
+
+#### Commit Message Convention
+
+Include dependency changes in commit messages:
+
+```bash
+git commit -m "chore: update @stellar/stellar-sdk to 12.2.0
+
+- Update from 12.1.0 to 12.2.0
+- Fixes RPC error handling vulnerability
+- All tests pass; no breaking changes
+
+Fixes #456"
+```
+
+#### Reporting Security Issues
+
+**Do NOT open a public GitHub issue for security vulnerabilities.** Email maintainers privately with proof-of-concept (if safe to share). Allow 7 days for a response before public disclosure.
+
+---
+
+**For comprehensive contributing guidelines, including code quality standards, workflow, and issue templates, see [CONTRIBUTING.md](CONTRIBUTING.md).**
 
 ### Filing Backend Issues
 
