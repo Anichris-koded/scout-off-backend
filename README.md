@@ -1,6 +1,6 @@
 # ScoutOff
 
-[![Soroban Contract CI](https://github.com/your-org/scout-off/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/your-org/scout-off/actions/workflows/contract-ci.yml)
+[![Backend CI](https://github.com/scout-off/scout-off-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/scout-off/scout-off-backend/actions/workflows/ci.yml)
 
 Decentralized football scouting platform on Stellar — tamper-proof player profiles, on-chain progress verification, and direct scout-to-player connections powered by Soroban smart contracts.
 
@@ -156,20 +156,34 @@ Example: A validator submits "Scored 5 goals in Local Cup" → Soroban contract 
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/health` | — | Liveness check |
+| `GET` | `/health` | — | Liveness check — returns Stellar RPC status |
+| `GET` | `/ready` | — | Readiness probe — checks IPFS and Stellar dependencies |
+| `GET` | `/health/liveness` | — | Kubernetes liveness probe |
+| `GET` | `/health/readiness` | — | Kubernetes readiness probe |
 | `GET` | `/auth/challenge?account=G...` | — | Get SEP-10 challenge XDR to sign |
 | `POST` | `/auth/token` | — | Submit signed XDR, receive JWT |
 | `POST` | `/api/players/register` | — | Pin metadata to IPFS, return CID |
 | `GET` | `/api/players` | — | Filter players (`region`, `position`, `minTier`) |
 | `GET` | `/api/players/:playerId` | — | Single player profile |
 | `GET` | `/api/players/:playerId/milestones` | — | Milestone history |
+| `PUT` | `/api/players/:playerId` | Bearer (owner) | Update player profile |
 | `GET` | `/api/scouts/:wallet/subscription` | Bearer | Subscription status |
 | `GET` | `/api/scouts/:wallet/contacts` | Bearer | Unlocked contacts |
-| `POST` | `/api/validators/milestone` | Bearer | Pin evidence, return CID |
-| `GET` | `/api/validators/milestones/pending` | Bearer | Pending milestone approvals |
+| `POST` | `/api/scouts/:wallet/contacts/:playerId/unlock` | Bearer | Pay-to-contact unlock |
+| `GET` | `/api/scouts/:wallet/payments` | Bearer | Payment history |
+| `POST` | `/api/validators/milestone` | Bearer (validator) | Pin evidence, return CID |
+| `GET` | `/api/validators/milestones/pending` | Bearer (validator) | Pending milestone approvals |
 | `GET` | `/api/admin/stats` | Bearer (admin) | Platform counts: players, milestones, subscriptions, events |
-| `GET` | `/api/admin/events` | Bearer | All indexed contract events |
-| `GET` | `/api/admin/fees` | Bearer | Fee withdrawal history |
+| `GET` | `/api/admin/events` | Bearer (admin) | All indexed contract events |
+| `GET` | `/api/admin/events/export` | Bearer (admin) | Export contract events as CSV |
+| `GET` | `/api/admin/fees` | Bearer (admin) | Fee withdrawal history |
+| `POST` | `/api/admin/validators/register` | Bearer (admin) | Register a new validator |
+| `POST` | `/api/admin/validators/revoke` | Bearer (admin) | Revoke an existing validator |
+| `POST` | `/api/admin/contract/pause` | Bearer (admin) | Pause the contract (circuit breaker) |
+| `POST` | `/api/admin/contract/unpause` | Bearer (admin) | Unpause the contract |
+| `POST` | `/api/admin/introspect` | Bearer (admin) | Inspect JWT token claims |
+
+> All `/api/*` routes are also available under `/api/v1/*`.
 
 ## Player Progress Flow
 
@@ -268,6 +282,8 @@ npm install
 ```
 
 ### 2. Build Smart Contracts
+
+> ⚠️ The `contracts/` directory is not yet implemented — see [#216](https://github.com/scout-off/scout-off-backend/issues/216). Skip steps 2–4 and run the backend against a pre-deployed testnet contract.
 
 ```bash
 cd contracts
@@ -532,35 +548,41 @@ In **production** (`NODE_ENV=production`) the same functions throw immediately i
 | `HORIZON_URL`             | Stellar Horizon endpoint                            |
 | `SOROBAN_RPC_URL`         | Soroban RPC endpoint                                |
 | `NETWORK`                 | `testnet` or `mainnet`                              |
+| `NETWORK_PASSPHRASE`      | Stellar network passphrase (auto-set by `NETWORK`)  |
 | `PINATA_API_KEY`          | Pinata API key for IPFS uploads                     |
 | `PINATA_SECRET`           | Pinata secret                                       |
 | `PLATFORM_FEE_BPS`        | Platform fee in basis points (default: 500)         |
 | `PORT`                    | Backend API port (default: 4000)                    |
 | `DB_PATH`                 | SQLite database file path (default: `scout-off.db`) |
 | `LOG_LEVEL`               | Log verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
-| `STELLAR_HEALTH_CHECK_ENABLED` | Include Stellar RPC in `/health` response (default: `true`; set `false` to disable in staging) |
+| `ADMIN_WALLET`            | Stellar address of the platform admin; automatically granted admin role on token exchange |
+| `STELLAR_HEALTH_CHECK`    | Set to `false` to disable Stellar RPC check in `/health` (default: `true`) |
 | `JSON_PAYLOAD_LIMIT`      | Maximum JSON request body size (default: `1mb`); requests exceeding limit return HTTP 413 |
+| `RATE_LIMIT_ENABLED`      | Set to `false` to disable rate limiting (default: `true`) |
+| `RATE_LIMIT_WINDOW_MS`    | Rate limit window in milliseconds (default: `60000`) |
+| `RATE_LIMIT_MAX`          | Max requests per window (default: `60`)             |
+| `WEBHOOK_ENABLED`         | Set to `true` to enable event webhooks (default: `false`) |
+| `WEBHOOK_URL`             | Endpoint to POST contract events to when `WEBHOOK_ENABLED=true` |
 
 ## Testing
 
 ```bash
-# Smart contract tests
-cd contracts && cargo test
+# Smart contract tests (contracts/ not yet implemented — see #216)
+# cd contracts && cargo test
 
 # Backend tests
 npm run test
 ```
 
-Contract test coverage includes:
-- ✅ Player registration and metadata storage
-- ✅ Milestone submission and approval by validators
-- ✅ Progress tier increments and tamper-proof history
-- ✅ Scout subscription and pay-to-contact payments
-- ✅ Trial offer logging and Elite Tier promotion
-- ✅ Validator registry — add and revoke
-- ✅ Authorization enforcement on all state-changing calls
-- ✅ Pause / unpause circuit breaker
-- ✅ Edge cases: duplicate milestones, unauthorized validators, zero-fee configs
+Backend test coverage includes:
+- ✅ Player registration and IPFS metadata pinning
+- ✅ Milestone submission and pending milestone queries
+- ✅ Scout subscription status and contact unlock flow
+- ✅ Admin stats, events, validator management endpoints
+- ✅ SEP-10 challenge and token exchange
+- ✅ Auth middleware (requireAuth, requireRole, requireOwner)
+- ✅ Rate limiting, payload size limits, correlation IDs
+- ✅ Health and readiness probes
 
 ## MVP Scope
 
@@ -576,7 +598,7 @@ Everything else (subscriptions, trial offer logging, fractionalized sponsorship)
 
 - [x] Player profile registration on Stellar testnet
 - [x] Validator-approved milestone system
-- [ ] Scout discovery filters (region, position, tier)
+- [x] Scout discovery filters (region, position, tier)
 - [ ] Pay-to-contact micro-fee flow
 - [ ] Scout subscription model
 - [ ] Trial offer logging (Elite Tier promotion)
@@ -620,12 +642,14 @@ Everything else (subscriptions, trial offer logging, fractionalized sponsorship)
 
 ## Dependencies
 
-- `soroban-sdk = "25.3.1"` — Soroban smart contract SDK
-- `next = "14.2.3"` — React framework
 - `@stellar/stellar-sdk = "12.1.0"` — Stellar JS SDK
-- `@stellar/freighter-api = "2.0.0"` — Freighter wallet integration
 - `express = "4.18.2"` — Backend API server
-- `node-fetch = "3.3.2"` — HTTP client for IPFS/Pinata
+- `better-sqlite3 = "9.4.3"` — SQLite database
+- `jsonwebtoken = "9.0.2"` — JWT signing and verification
+- `axios = "1.6.8"` — HTTP client for IPFS/Pinata
+- `node-fetch = "^2.7.0"` — HTTP client (legacy fetch support)
+- `zod = "3.23.8"` — Request validation
+- `form-data = "4.0.0"` — Multipart uploads to Pinata
 
 ## License
 
@@ -633,7 +657,7 @@ MIT
 
 ## Support
 
-- GitHub Issues: [Create an issue](https://github.com/your-org/scout-off/issues)
+- GitHub Issues: [Create an issue](https://github.com/scout-off/scout-off-backend/issues)
 - Stellar Discord: https://discord.gg/stellar
 - Stellar Developers: https://developers.stellar.org
 
@@ -648,7 +672,7 @@ Contributions are welcome! This section provides guidance for backend contributo
 
 2. **Fork and Set Up**
    ```bash
-   git clone https://github.com/your-org/scout-off.git
+   git clone https://github.com/scout-off/scout-off-backend.git
    cd scout-off-backend
    npm install
    npm run dev
@@ -749,7 +773,7 @@ Priority is assigned by maintainers based on impact and timeline:
 #### How to File a High-Quality Issue
 
 1. **Check Existing Issues First**  
-   Search [GitHub Issues](https://github.com/your-org/scout-off/issues) to avoid duplicates.
+   Search [GitHub Issues](https://github.com/scout-off/scout-off-backend/issues) to avoid duplicates.
 
 2. **Use a Clear Title**  
    ✅ *"Auth token expires before subscription ends"*  
