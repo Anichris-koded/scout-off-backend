@@ -56,7 +56,16 @@ export function extractAccount(xdr: string): string | null {
 
 /**
  * Verify the client-signed challenge XDR and issue a JWT.
- * Validates both the structure of the challenge and the client's signature.
+ *
+ * This implements SEP-10 authentication by:
+ * 1. Validating the challenge transaction structure
+ * 2. Cryptographically verifying the client's signature using Keypair.verify()
+ * 3. Issuing a JWT if all checks pass
+ *
+ * @param xdr - The signed challenge transaction in XDR format
+ * @param role - Optional role claim for the JWT (defaults to 'player')
+ * @returns JWT token and authenticated account ID
+ * @throws Error if challenge structure is invalid or signature verification fails
  */
 export function verifyAndIssueToken(xdr: string, role?: string): { token: string; account: string } {
   const network =
@@ -98,7 +107,8 @@ export function verifyAndIssueToken(xdr: string, role?: string): { token: string
     throw new Error('Missing source account in challenge');
   }
 
-  // Verify the client signed it
+  // 5. Cryptographically verify the client signed the transaction
+  // Using Keypair.verify() for proper ECDSA signature validation per SEP-10
   const clientKeypair = Keypair.fromPublicKey(clientAccountId);
   const valid = tx.signatures.some((sig) => {
     try {
@@ -110,6 +120,7 @@ export function verifyAndIssueToken(xdr: string, role?: string): { token: string
 
   if (!valid) throw new Error('Invalid challenge signature');
 
+  // Issue JWT with client account and role
   const token = jwt.sign({ sub: clientAccountId, role: role ?? 'player' }, config.jwtSecret, {
     expiresIn: TOKEN_TTL_SECONDS,
   });
