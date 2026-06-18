@@ -8,8 +8,11 @@ jest.mock('../../src/services/ipfs', () => ({
   pinJson: jest.fn().mockResolvedValue('QmTestCid123'),
 }));
 
-jest.mock('../../src/services/indexer', () => ({
+jest.mock('../../src/db', () => ({
   getEvents: jest.fn(),
+}));
+
+jest.mock('../../src/services/indexer', () => ({
   indexEvents: jest.fn(),
   normalizeEventId: jest.fn(),
 }));
@@ -18,7 +21,7 @@ jest.mock('../../src/services/cache', () => ({
   invalidateMilestoneCache: jest.fn(),
 }));
 
-import { getEvents } from '../../src/services/indexer';
+import { getEvents } from '../../src/db';
 const mockGetEvents = getEvents as jest.Mock;
 
 function makeToken(wallet: string, role: string): string {

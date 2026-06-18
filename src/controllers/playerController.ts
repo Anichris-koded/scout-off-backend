@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { CID_REGEX } from '../utils/cidValidator';
 import { pinJson, gatewayUrl } from '../services/ipfs';
 import { serializeIpfsResult } from '../utils/ipfsSerializer';
-import { getEvents } from '../services/indexer';
+import { getEvents } from '../db';
 import { queryMilestones } from '../services/stellar';
 import { invalidatePlayerCache } from '../services/cache';
 import { ApiResponse, ProgressLevel } from '../types';

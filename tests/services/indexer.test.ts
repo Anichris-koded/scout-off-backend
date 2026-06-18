@@ -1,4 +1,5 @@
-import { getEvents, normalizeEventId } from '../../src/services/indexer';
+import { getEvents } from '../../src/db';
+import { normalizeEventId } from '../../src/services/indexer';
 
 describe('indexer', () => {
   it('returns empty array when no events exist for a type', () => {

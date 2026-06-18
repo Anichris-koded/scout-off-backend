@@ -16,8 +16,11 @@ jest.mock('../../src/services/stellar', () => ({
   withdrawFees: jest.fn(),
 }));
 
-jest.mock('../../src/services/indexer', () => ({
+jest.mock('../../src/db', () => ({
   getEvents: jest.fn().mockReturnValue([]),
+}));
+
+jest.mock('../../src/services/indexer', () => ({
   indexEvents: jest.fn(),
   normalizeEventId: jest.fn(),
 }));

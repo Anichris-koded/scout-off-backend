@@ -4,8 +4,11 @@ import app from '../../src/app';
 
 const SECRET = process.env.JWT_SECRET ?? 'test-secret';
 
-jest.mock('../../src/services/indexer', () => ({
+jest.mock('../../src/db', () => ({
   getEvents: jest.fn(),
+}));
+
+jest.mock('../../src/services/indexer', () => ({
   indexEvents: jest.fn(),
   normalizeEventId: jest.fn(),
 }));
@@ -17,7 +20,7 @@ jest.mock('../../src/services/stellar', () => ({
   },
 }));
 
-import { getEvents } from '../../src/services/indexer';
+import { getEvents } from '../../src/db';
 import { submitContactPayment } from '../../src/services/stellar';
 const mockGetEvents = getEvents as jest.Mock;
 const mockSubmitContactPayment = submitContactPayment as jest.Mock;

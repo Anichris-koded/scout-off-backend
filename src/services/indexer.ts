@@ -1,7 +1,6 @@
-import Database from 'better-sqlite3';
 import { server } from './stellar';
 import config from '../config';
-import { EventRecord, ContractEventType } from '../types';
+import { getDb, getLastLedger, setLastLedger } from '../db';
 
 // ─── Deduplication strategy ───────────────────────────────────────────────────
 //
@@ -34,44 +33,14 @@ function onBeforeInsert(_eventId: string): void { /* hook */ }
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function onAfterInsert(_eventId: string): void { /* hook */ }
 
-// ─── DB setup ────────────────────────────────────────────────────────────────
-
-const db = new Database(config.dbPath);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS events (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    type      TEXT NOT NULL,
-    ledger    INTEGER NOT NULL,
-    tx_hash   TEXT NOT NULL UNIQUE,
-    payload   TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS indexer_state (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-`);
-
-function getLastLedger(): number {
-  const row = db
-    .prepare('SELECT value FROM indexer_state WHERE key = ?')
-    .get('last_ledger') as { value: string } | undefined;
-  return row ? parseInt(row.value, 10) : 0;
-}
-
-function setLastLedger(ledger: number): void {
-  db.prepare(
-    'INSERT INTO indexer_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-  ).run('last_ledger', String(ledger));
-}
-
-// ─── Indexer ─────────────────────────────────────────────────────────────────
-
-const insert = db.prepare(
-  'INSERT OR IGNORE INTO events (type, ledger, tx_hash, payload) VALUES (?, ?, ?, ?)'
-);
+// ─── Indexer ──────────────────────────────────────────────────────────────────
 
 export async function indexEvents(): Promise<void> {
+  const db = getDb();
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO events (type, ledger, tx_hash, payload) VALUES (?, ?, ?, ?)'
+  );
+
   const fromLedger = getLastLedger();
 
   const response = await server.getEvents({
@@ -99,19 +68,4 @@ export async function indexEvents(): Promise<void> {
 
   const latest = response.events.at(-1)!;
   setLastLedger(latest.ledger + 1);
-}
-
-// ─── Query helpers ────────────────────────────────────────────────────────────
-
-export function getEvents(type?: ContractEventType): EventRecord[] {
-  const rows = type
-    ? (db.prepare('SELECT * FROM events WHERE type = ? ORDER BY ledger ASC').all(type) as any[])
-    : (db.prepare('SELECT * FROM events ORDER BY ledger ASC').all() as any[]);
-
-  return rows.map((r) => ({
-    source: config.contractId,
-    type: r.type as ContractEventType,
-    payload: JSON.parse(r.payload),
-    contractAddress: config.contractId,
-  }));
 }

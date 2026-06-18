@@ -9,8 +9,13 @@ jest.mock('../../src/services/ipfs', () => ({
   gatewayUrl: jest.fn((cid) => `https://gateway.pinata.cloud/ipfs/${cid}`),
 }));
 
-jest.mock('../../src/services/indexer', () => ({
+jest.mock('../../src/db', () => ({
   getEvents: jest.fn().mockReturnValue([]),
+}));
+
+jest.mock('../../src/services/indexer', () => ({
+  indexEvents: jest.fn(),
+  normalizeEventId: jest.fn(),
 }));
 
 jest.mock('../../src/services/webhooks', () => ({
