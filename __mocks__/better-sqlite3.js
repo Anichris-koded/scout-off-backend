@@ -20,12 +20,19 @@ class Statement {
     } else if (sql.startsWith('INSERT INTO INDEXER_STATE') || sql.startsWith('INSERT OR REPLACE INTO INDEXER_STATE')) {
       const [key, value] = args;
       this._db._state.set(key, value);
+    } else if (sql.startsWith('INSERT INTO MIGRATIONS')) {
+      const [id, appliedAt] = args;
+      this._db._migrations.set(id, { id, applied_at: appliedAt });
     }
     return { changes: 1, lastInsertRowid: 0 };
   }
 
   get(...args) {
     const sql = this._sql.toUpperCase();
+    if (sql.includes('FROM MIGRATIONS')) {
+      const id = args[0];
+      return this._db._migrations.get(id) ?? undefined;
+    }
     if (sql.includes('INDEXER_STATE')) {
       const key = args[0];
       const value = this._db._state.get(key);
@@ -36,6 +43,9 @@ class Statement {
 
   all(...args) {
     const sql = this._sql.toUpperCase();
+    if (sql.includes('FROM MIGRATIONS')) {
+      return [...this._db._migrations.values()];
+    }
     if (sql.includes('FROM EVENTS')) {
       if (sql.includes('WHERE TYPE = ?')) {
         return this._db._events.filter((e) => e.type === args[0]);
@@ -50,6 +60,7 @@ class Database {
   constructor(_path) {
     this._events = [];
     this._state = new Map();
+    this._migrations = new Map();
   }
 
   exec(_sql) {

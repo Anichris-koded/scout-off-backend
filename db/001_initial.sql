@@ -1,5 +1,5 @@
 -- Migration 001: initial schema
--- Applied automatically by indexer.ts on startup via better-sqlite3.
+-- Applied automatically by runMigrations() (src/db/migrate.ts) on startup.
 -- This file is the canonical reference for the DB schema.
 
 CREATE TABLE IF NOT EXISTS events (

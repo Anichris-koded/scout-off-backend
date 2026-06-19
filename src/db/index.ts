@@ -1,31 +1,20 @@
 import Database from 'better-sqlite3';
 import config from '../config';
 import { EventRecord, ContractEventType } from '../types';
+import { runMigrations } from './migrate';
 
 // ─── Connection & schema ──────────────────────────────────────────────────────
 
 let _db: Database.Database | null = null;
 
 /**
- * Initialise the database connection and create tables.
+ * Initialise the database connection and run pending migrations.
  * Must be called once at application startup before any query helper is used.
  * Safe to call in tests with DB_PATH=:memory: set before import.
  */
 export function initDb(): void {
   _db = new Database(config.dbPath);
-  _db.exec(`
-    CREATE TABLE IF NOT EXISTS events (
-      id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      type      TEXT NOT NULL,
-      ledger    INTEGER NOT NULL,
-      tx_hash   TEXT NOT NULL UNIQUE,
-      payload   TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS indexer_state (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-  `);
+  runMigrations(_db);
 }
 
 export function getDb(): Database.Database {
