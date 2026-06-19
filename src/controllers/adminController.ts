@@ -41,16 +41,33 @@ export const adminDateRangeSchema = z.object({
   { message: 'startDate must not be after endDate' }
 );
 
+const paginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 /** GET /api/admin/events */
 export async function getAllEvents(req: Request, res: Response, next: NextFunction) {
   try {
-    const { startDate, endDate, eventType } = (req as any).query as z.infer<typeof adminDateRangeSchema>;
+    const dateResult = adminDateRangeSchema.safeParse(req.query);
+    if (!dateResult.success) {
+      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters' });
+      return;
+    }
+    const pageResult = paginationSchema.safeParse(req.query);
+    if (!pageResult.success) {
+      res.status(400).json({ success: false, error: pageResult.error.errors[0]?.message ?? 'Invalid pagination parameters' });
+      return;
+    }
+    const { startDate, endDate, eventType } = dateResult.data;
+    const { limit, offset } = pageResult.data;
     let events = getEvents() as unknown as EventRecord[];
     if (eventType) events = events.filter((e: any) => e.type === eventType);
     if (startDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) >= startDate!);
     if (endDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) <= endDate!);
-    const body: ApiResponse<EventRecord[]> = { success: true, data: events };
-    res.json(body);
+    const total = events.length;
+    const data = events.slice(offset, offset + limit);
+    res.json({ success: true, data, total, limit, offset });
   } catch (err) {
     next(err);
   }
@@ -59,6 +76,11 @@ export async function getAllEvents(req: Request, res: Response, next: NextFuncti
 /** GET /api/admin/fees — returns fees_withdrawn event payloads */
 export async function getFeeSummary(req: Request, res: Response, next: NextFunction) {
   try {
+    const dateResult = adminDateRangeSchema.safeParse(req.query);
+    if (!dateResult.success) {
+      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters' });
+      return;
+    }
     const adminWallet = (req as any).account as string ?? 'unknown';
     logAuditEvent({
       action: 'fee_history_query',

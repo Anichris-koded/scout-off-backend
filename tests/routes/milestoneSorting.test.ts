@@ -1,5 +1,5 @@
 import request from 'supertest';
-import app from '../../src/index';
+import app from '../../src/app';
 
 describe('GET /api/players/:playerId/milestones - sorting', () => {
   it('returns milestones with default sort (asc by submittedAt)', async () => {

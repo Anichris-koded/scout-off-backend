@@ -1,5 +1,5 @@
 import request from 'supertest';
-import app from '../../src/index';
+import app from '../../src/app';
 
 describe('404 fallback handler', () => {
   it('returns 404 JSON for unknown path', async () => {

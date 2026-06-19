@@ -15,6 +15,7 @@ jest.mock('../../src/services/indexer', () => ({
 
 jest.mock('../../src/services/stellar', () => ({
   submitContactPayment: jest.fn(),
+  isSubscribed: jest.fn().mockResolvedValue({ active: false, expiresAt: null }),
   PaymentError: class PaymentError extends Error {
     constructor(public message: string, public code: string) { super(message); }
   },

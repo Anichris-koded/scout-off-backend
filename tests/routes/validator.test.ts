@@ -1,6 +1,6 @@
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
-import app from '../../src/index';
+import app from '../../src/app';
 
 const SECRET = process.env.JWT_SECRET ?? 'test-secret';
 
@@ -42,7 +42,7 @@ describe('POST /api/validators/milestone', () => {
   const validPayload = {
     playerId: 'player-123',
     milestoneType: 'performance',
-    evidenceUri: 'QmEvidenceCid',
+    evidenceUri: 'ipfs://QmEvidenceCid',
   };
 
   it('returns 401 when no token is provided', async () => {

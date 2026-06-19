@@ -2,8 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import config from '../config';
 
 interface RateLimitOptions {
-  windowMs?: number; // time window in ms (default: 60_000)
-  max?: number;      // max requests per window per IP (default: 10)
+  windowMs?: number; // time window in ms (default: config.rateLimit.windowMs)
+  max?: number;      // max requests per window per IP (default: config.rateLimit.max)
 }
 
 /**
@@ -11,8 +11,8 @@ interface RateLimitOptions {
  * Configurable via windowMs and max; excess requests return HTTP 429.
  */
 export function rateLimit(options: RateLimitOptions = {}) {
-  const windowMs = options.windowMs ?? 60_000;
-  const max = options.max ?? 10;
+  const windowMs = options.windowMs ?? config.rateLimit.windowMs;
+  const max = options.max ?? config.rateLimit.max;
   const hits = new Map<string, { count: number; resetAt: number }>();
 
   return (req: Request, res: Response, next: NextFunction): void => {

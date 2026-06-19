@@ -67,9 +67,9 @@ export async function registerPlayer(req: Request, res: Response, next: NextFunc
       position: sanitizedPosition,
       region: sanitizedRegion,
     });
-    const body: ApiResponse<typeof ipfsResult & { metadataUri: string }> = {
+    const body: ApiResponse<typeof ipfsResult & { metadataUri: string; gatewayUrl: string }> = {
       success: true,
-      data: { ...ipfsResult, metadataUri },
+      data: { ...ipfsResult, metadataUri, gatewayUrl: ipfsResult.uri },
     };
     res.status(201).json(body);
   } catch (err) {
@@ -161,13 +161,23 @@ const milestonesQuerySchema = z.object({
 export async function getPlayerMilestones(req: Request, res: Response, next: NextFunction) {
   try {
     const playerId = sanitizeInput(req.params.playerId);
-    // Fetch indexed (off-chain) events from the local event store
-    const indexedMilestones = getEvents('milestone_approved').filter(
-      (e) => e.payload.player_id === playerId
-    );
-    // Fetch on-chain milestones from the Soroban contract stub
+    const parsed = milestonesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid query parameters' });
+      return;
+    }
+    const { sortBy, order } = parsed.data;
+    const indexedMilestones = getEvents('milestone_approved')
+      .filter((e) => e.payload.player_id === playerId)
+      .map((e) => ({ ...e.payload }));
     const onChainMilestones = await queryMilestones(playerId);
-    res.json({ success: true, data: { indexed: indexedMilestones, onChain: onChainMilestones } });
+    const combined: any[] = [...indexedMilestones, ...onChainMilestones];
+    combined.sort((a, b) => {
+      const av = Number(a[sortBy] ?? 0);
+      const bv = Number(b[sortBy] ?? 0);
+      return order === 'asc' ? av - bv : bv - av;
+    });
+    res.json({ success: true, data: combined });
   } catch (err) {
     next(err);
   }

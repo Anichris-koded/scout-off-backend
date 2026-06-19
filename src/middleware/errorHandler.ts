@@ -13,6 +13,24 @@ export function errorHandler(
 
   logger.error(`[error] ${err.message}${correlationId ? ` correlationId=${correlationId}` : ''}`);
 
+  if ((err as any).type === 'entity.parse.failed') {
+    res.status(400).json({
+      success: false,
+      error: 'Malformed JSON payload',
+      ...(correlationId !== undefined && { correlationId }),
+    });
+    return;
+  }
+
+  if ((err as any).type === 'entity.too.large') {
+    res.status(413).json({
+      success: false,
+      error: 'Payload too large',
+      ...(correlationId !== undefined && { correlationId }),
+    });
+    return;
+  }
+
   if (err instanceof ZodError) {
     const body: ApiResponse & { correlationId?: string } = {
       success: false,
