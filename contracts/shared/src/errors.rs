@@ -6,8 +6,9 @@ use soroban_sdk::contracterror;
 pub enum Error {
     AlreadyInitialized = 1,
     NotInitialized = 2,
-    Unauthorized = 3,
+    PlayerNotFound = 3,
     NotFound = 4,
     InvalidInput = 5,
-    ContractPaused = 6,
+    Unauthorized = 9,
+    ContractPaused = 10,
 }

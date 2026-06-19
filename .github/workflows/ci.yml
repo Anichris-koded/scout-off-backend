@@ -61,3 +61,7 @@ jobs:
       - name: Build contracts (WASM)
         working-directory: contracts
         run: cargo build --release
+
+      - name: Test contracts (host target)
+        working-directory: contracts
+        run: cargo test --target x86_64-unknown-linux-gnu
