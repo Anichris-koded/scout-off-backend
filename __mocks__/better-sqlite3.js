@@ -45,6 +45,10 @@ class Statement {
 
   get(...args) {
     const sql = this._sql.toUpperCase();
+    if (sql.includes('FROM MIGRATIONS')) {
+      const id = args[0];
+      return this._db._migrations.get(id) ?? undefined;
+    }
     if (sql.includes('INDEXER_STATE')) {
       const key = args[0];
       const value = this._db._state.get(key);
@@ -64,6 +68,9 @@ class Statement {
 
   all(...args) {
     const sql = this._sql.toUpperCase();
+    if (sql.includes('FROM MIGRATIONS')) {
+      return [...this._db._migrations.values()];
+    }
     if (sql.includes('FROM EVENTS')) {
       let rows;
       let argIdx = 0;

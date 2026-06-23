@@ -1,13 +1,14 @@
 import Database from 'better-sqlite3';
 import config from '../config';
 import { EventRecord, ContractEventType } from '../types';
+import { runMigrations } from './migrate';
 
 // ─── Connection & schema ──────────────────────────────────────────────────────
 
 let _db: Database.Database | null = null;
 
 /**
- * Initialise the database connection and create tables.
+ * Initialise the database connection and run pending migrations.
  * Must be called once at application startup before any query helper is used.
  * Safe to call in tests with DB_PATH=:memory: set before import.
  */
