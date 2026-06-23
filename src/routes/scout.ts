@@ -43,4 +43,24 @@ router.get('/:wallet/contacts', requireRole('scout'), getUnlockedContacts);
 router.post('/:wallet/contacts/:playerId/unlock', requireRole('scout'), unlockContact);
 router.get('/:wallet/payments', requireRole('scout'), getPaymentHistory);
 
+/**
+ * POST /api/scouts/:wallet/trial-offer
+ *
+ * Logs an immutable on-chain trial offer for a player, promoting them to
+ * Elite Tier (Level 3). The scout must hold an active subscription or have
+ * previously paid the contact fee for this player.
+ *
+ * @param wallet {string} - Scout's Stellar public key
+ * @body playerId {string} - Target player's on-chain identifier
+ * @body detailsUri {string} - IPFS (ipfs://) or HTTPS URI of the offer terms document
+ * @response 201 { success: true, data: { transactionId, playerId, detailsUri, playerTier } }
+ * @response 400 { success: false, error: string } - Missing playerId or invalid detailsUri
+ * @response 401 { success: false, error: string } - Missing or invalid token
+ * @response 402 { success: false, error: string } - Scout must be subscribed or have paid the contact fee
+ * @response 403 { success: false, error: string } - Scout role required, or wallet mismatch
+ * @response 404 { success: false, error: string } - Player not found
+ * @auth Bearer (scout role)
+ */
+router.post('/:wallet/trial-offer', requireRole('scout'), validateBody(trialOfferSchema), submitTrialOffer);
+
 export default router;

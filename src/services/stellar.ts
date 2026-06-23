@@ -77,6 +77,37 @@ export async function submitContactPayment(
   };
 }
 
+// ─── Trial offer ──────────────────────────────────────────────────────────────
+
+export interface TrialOfferResult {
+  transactionId: string;
+  playerId: string;
+  detailsUri: string;
+  playerTier: number;
+}
+
+/**
+ * Stub: invoke the contract's `log_trial_offer(scout, player_id, details_uri)` method.
+ * Creates an immutable on-chain record of the offer and promotes the player to
+ * Elite Tier (Level 3). Replace with a real Soroban invocation when ready.
+ */
+export async function logTrialOffer(
+  scoutWallet: string,
+  playerId: string,
+  detailsUri: string,
+): Promise<TrialOfferResult> {
+  if (!scoutWallet || !playerId || !detailsUri) {
+    throw new PaymentError('Missing scoutWallet, playerId, or detailsUri', 'INVALID_ACCOUNT');
+  }
+  // TODO: build and submit log_trial_offer Soroban transaction
+  return {
+    transactionId: `stub-txid-${Date.now()}`,
+    playerId,
+    detailsUri,
+    playerTier: 3,
+  };
+}
+
 // ─── Milestone query ──────────────────────────────────────────────────────────
 
 export interface OnChainMilestone {

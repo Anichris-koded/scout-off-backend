@@ -22,9 +22,11 @@ jest.mock('../../src/services/stellar', () => ({
 }));
 
 import { getEvents } from '../../src/db';
-import { submitContactPayment } from '../../src/services/stellar';
+import { submitContactPayment, isSubscribed, logTrialOffer } from '../../src/services/stellar';
 const mockGetEvents = getEvents as jest.Mock;
 const mockSubmitContactPayment = submitContactPayment as jest.Mock;
+const mockIsSubscribed = isSubscribed as jest.Mock;
+const mockLogTrialOffer = logTrialOffer as jest.Mock;
 
 function makeToken(wallet: string, role = 'scout'): string {
   return jwt.sign({ sub: wallet, role }, SECRET, { expiresIn: '1h' });
@@ -42,6 +44,7 @@ const OTHER  = 'GOTHERWALLET2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 beforeEach(() => {
   mockGetEvents.mockReset();
+  mockIsSubscribed.mockReset().mockResolvedValue({ active: false, expiresAt: null });
 });
 
 // ─── GET /api/scouts/:wallet/subscription ─────────────────────────────────────
