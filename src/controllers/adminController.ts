@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
-import { getEvents } from '../db';
-import { ApiResponse, EventRecord } from '../types';
+import { getEvents, getEventsCount } from '../db';
+import { ApiResponse, EventRecord, ContractEventType } from '../types';
 import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult } from '../services/stellar';
 import config from '../config';
@@ -42,8 +42,10 @@ export const adminDateRangeSchema = z.object({
 );
 
 const paginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
 });
 
 /** GET /api/admin/events */
@@ -60,17 +62,19 @@ export async function getAllEvents(req: Request, res: Response, next: NextFuncti
       return;
     }
     const { startDate, endDate, eventType } = dateResult.data;
-    const { limit, offset } = pageResult.data;
-    let events = getEvents() as unknown as EventRecord[];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (eventType) events = events.filter((e: any) => e.type === eventType);
+    const { limit: requestedLimit, offset: requestedOffset, page, pageSize } = pageResult.data;
+    const limit = requestedLimit ?? pageSize ?? 20;
+    const offset = requestedOffset ?? ((page ?? 1) - 1) * limit;
+
+    const eventTypeFilter = eventType as ContractEventType | undefined;
+    let events = getEvents(eventTypeFilter, { limit, offset }) as unknown as EventRecord[];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (startDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) >= startDate!);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (endDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) <= endDate!);
-    const total = events.length;
-    const data = events.slice(offset, offset + limit);
-    res.json({ success: true, data, total, limit, offset });
+
+    const total = getEventsCount(eventTypeFilter);
+    res.json({ success: true, data: events, total, limit, offset });
   } catch (err) {
     next(err);
   }

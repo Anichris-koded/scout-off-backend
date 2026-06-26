@@ -63,6 +63,21 @@ class Statement {
         : this._db._events;
       return { count: rows.length };
     }
+    if (sql.includes('COUNT(*)') && sql.includes('FROM PLAYERS')) {
+      let rows = [...this._db._players];
+      const whereMatch = sql.match(/WHERE (.+?)(?:ORDER|$)/);
+      if (whereMatch) {
+        const conditions = whereMatch[1].split(' AND ');
+        let argIdx = 0;
+        for (const cond of conditions) {
+          const val = args[argIdx++];
+          if (cond.includes('REGION = ?')) rows = rows.filter((r) => r.region === val);
+          else if (cond.includes('POSITION = ?')) rows = rows.filter((r) => r.position === val);
+          else if (cond.includes('PROGRESS_LEVEL >= ?')) rows = rows.filter((r) => r.progress_level >= val);
+        }
+      }
+      return { count: rows.length };
+    }
     return undefined;
   }
 
@@ -88,7 +103,6 @@ class Statement {
     }
     if (sql.includes('FROM PLAYERS')) {
       let rows = [...this._db._players];
-      // Parse WHERE conditions from remaining args in order
       const whereMatch = sql.match(/WHERE (.+?)(?:ORDER|$)/);
       if (whereMatch) {
         const conditions = whereMatch[1].split(' AND ');
@@ -99,6 +113,11 @@ class Statement {
           else if (cond.includes('POSITION = ?')) rows = rows.filter((r) => r.position === val);
           else if (cond.includes('PROGRESS_LEVEL >= ?')) rows = rows.filter((r) => r.progress_level >= val);
         }
+      }
+      if (sql.includes('LIMIT ?')) {
+        const limit = args[args.length - 2];
+        const offset = args[args.length - 1] ?? 0;
+        rows = rows.slice(offset, offset + limit);
       }
       return rows;
     }

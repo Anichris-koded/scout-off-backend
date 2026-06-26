@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { CID_REGEX } from '../utils/cidValidator';
 import { pinJson } from '../services/ipfs';
 import { serializeIpfsResult } from '../utils/ipfsSerializer';
-import { getEvents, getPlayerById, queryPlayers } from '../db';
+import { countPlayers, getEvents, getPlayerById, queryPlayers } from '../db';
 import { queryMilestones, updateProfile } from '../services/stellar';
 import { invalidatePlayerCache } from '../services/cache';
 import { ApiResponse } from '../types';
@@ -124,12 +124,17 @@ export async function filterPlayers(req: Request, res: Response, next: NextFunct
       region: sanitizedRegion,
       position: normalizedPosition ?? sanitizedPosition,
       minTier,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
     });
 
-    const total = rows.length;
+    const total = countPlayers({
+      region: sanitizedRegion,
+      position: normalizedPosition ?? sanitizedPosition,
+      minTier,
+    });
     const pages = Math.ceil(total / pageSize);
-    const paginated = rows.slice((page - 1) * pageSize, page * pageSize);
-    const enriched = paginated.map((row) => ({
+    const enriched = rows.map((row) => ({
       player_id: row.player_id,
       wallet: row.wallet,
       position: row.position,

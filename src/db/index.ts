@@ -121,6 +121,8 @@ export interface QueryPlayersOptions {
   region?: string;
   position?: string;
   minTier?: number;
+  limit?: number;
+  offset?: number;
 }
 
 export function upsertPlayer(p: {
@@ -158,7 +160,7 @@ export function getPlayerById(playerId: string): PlayerRow | null {
   ) ?? null;
 }
 
-export function queryPlayers(opts: QueryPlayersOptions = {}): PlayerRow[] {
+function buildPlayerWhereClause(opts: QueryPlayersOptions): { where: string; params: (string | number)[] } {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
@@ -175,8 +177,32 @@ export function queryPlayers(opts: QueryPlayersOptions = {}): PlayerRow[] {
     params.push(opts.minTier);
   }
 
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  return getDb()
-    .prepare(`SELECT * FROM players ${where} ORDER BY created_at ASC`)
-    .all(...params) as PlayerRow[];
+  return {
+    where: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
+export function countPlayers(opts: QueryPlayersOptions = {}): number {
+  const { where, params } = buildPlayerWhereClause(opts);
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS count FROM players ${where}`)
+    .get(...params) as { count: number } | undefined;
+  return row?.count ?? 0;
+}
+
+export function queryPlayers(opts: QueryPlayersOptions = {}): PlayerRow[] {
+  const { where, params } = buildPlayerWhereClause(opts);
+  const sql = [`SELECT * FROM players ${where} ORDER BY created_at ASC`];
+
+  if (opts.limit !== undefined) {
+    sql.push('LIMIT ?');
+    params.push(opts.limit);
+  }
+  if (opts.offset !== undefined) {
+    sql.push('OFFSET ?');
+    params.push(opts.offset);
+  }
+
+  return getDb().prepare(sql.join(' ')).all(...params) as PlayerRow[];
 }
