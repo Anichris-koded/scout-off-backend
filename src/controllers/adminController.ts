@@ -381,3 +381,54 @@ export async function reindex(req: Request, res: Response, next: NextFunction) {
     next(err);
   }
 }
+
+const updatePlatformFeeSchema = z.object({
+  platformFeeBps: z.number().int().min(0).max(10000), // 0-100% in basis points
+});
+
+/**
+ * POST /api/admin/platform-fee
+ * Update platform fee configuration on-chain
+ */
+export async function updatePlatformFee(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (req.role !== 'admin') {
+      res.status(403).json({ success: false, error: 'Insufficient permissions' });
+      return;
+    }
+
+    const adminWallet = req.account ?? 'unknown';
+    const parsed = updatePlatformFeeSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      logAuditEvent({
+        action: 'platform_fee_update_attempt',
+        adminWallet,
+        queryParams: { error: 'validation_failed', reason: parsed.error.errors[0]?.message },
+        timestamp: new Date().toISOString(),
+      });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body' });
+      return;
+    }
+
+    const { platformFeeBps } = parsed.data;
+
+    logger.info(`[admin] action=update_platform_fee admin=${adminWallet} platformFeeBps=${platformFeeBps}`);
+    logAuditEvent({
+      action: 'platform_fee_update_attempt',
+      adminWallet,
+      queryParams: { platformFeeBps, outcome: 'submitted' },
+      timestamp: new Date().toISOString(),
+      contractAction: 'set_platform_fee_bps',
+    });
+
+    // NOTE: Contract-level update is simulated. Real invocation will call set_platform_fee_bps() on the Soroban contract.
+    res.status(202).json({
+      success: true,
+      message: `Platform fee update to ${platformFeeBps} bps submitted (simulated)`,
+      transactionId: 'stub-platform-fee-txn-placeholder',
+    });
+  } catch (err) {
+    next(err);
+  }
+}

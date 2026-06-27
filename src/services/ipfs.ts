@@ -73,6 +73,11 @@ export function gatewayUrl(cid: string): string {
   return `${config.pinata.gateway}/ipfs/${cid}`;
 }
 
+/** Build all public gateway URLs for a CID, in priority order. */
+export function gatewayUrls(cid: string): string[] {
+  return config.pinata.gateways.map(gateway => `${gateway}/ipfs/${cid}`);
+}
+
 /** Strip ipfs:// prefix from a URI, or return the input unchanged. */
 export async function getCid(uriOrCid: string): Promise<string> {
   return uriOrCid.startsWith('ipfs://') ? uriOrCid.replace('ipfs://', '') : uriOrCid;
@@ -92,4 +97,4 @@ export async function checkHealth(): Promise<void> {
   await axios.get(PINATA_TEST_URL, { headers: pinataHeaders() });
 }
 
-export default { pinJson, pinFile, gatewayUrl, getCid, checkHealth };
+export default { pinJson, pinFile, gatewayUrl, gatewayUrls, getCid, checkHealth };

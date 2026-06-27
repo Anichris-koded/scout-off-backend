@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex, updatePlatformFee } from '../controllers/adminController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
 
@@ -147,5 +147,20 @@ router.post('/introspect', requireRole('admin'), introspectToken);
  * @auth Bearer (admin role required)
  */
 router.post('/indexer/reindex', requireRole('admin'), reindex);
+
+/**
+ * POST /api/admin/platform-fee
+ *
+ * Submits a request to update the platform fee configuration on the Soroban contract.
+ * Only platform admins may call this endpoint.
+ *
+ * @body platformFeeBps {number} - New platform fee in basis points (0-10000)
+ * @response 202 { success: true, message: string, transactionId: string }
+ * @response 400 { success: false, error: string } - Invalid platformFeeBps
+ * @response 401 { success: false, error: string } - Missing token
+ * @response 403 { success: false, error: string } - Non-admin role
+ * @auth Bearer (admin role required)
+ */
+router.post('/platform-fee', requireRole('admin'), updatePlatformFee);
 
 export default router;
