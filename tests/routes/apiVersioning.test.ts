@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
-import app from '../../src/index';
+import app from '../../src/app';
 import { API_PREFIX, API_V1_PREFIX } from '../../src/config';
 
 async function getAdminToken(): Promise<string> {

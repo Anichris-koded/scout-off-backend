@@ -14,7 +14,7 @@ export function isOwner(account: string | undefined, targetId: string): boolean 
  * Returns 403 if the caller is not the profile owner.
  */
 export function requireOwner(req: Request, res: Response, next: NextFunction): void {
-  const account = (req as any).account as string | undefined;
+  const account = req.account;
   const { playerId } = req.params;
   if (!isOwner(account, playerId)) {
     sendForbidden(res, 'Forbidden: not the profile owner');

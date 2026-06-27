@@ -68,7 +68,7 @@ export function postToken(req: Request, res: Response, next: NextFunction): void
       err.message === 'Missing source account in challenge'
     )) {
       let attemptedWallet: string | null = null;
-      try { attemptedWallet = extractAccount((req.body as any).transaction); } catch { /* not extractable */ }
+      try { attemptedWallet = extractAccount((req.body as { transaction?: string }).transaction ?? ''); } catch { /* not extractable */ }
       logger.warn('[auth] failed_token_exchange', {
         correlationId: req.correlationId,
         origin: extractClientIp(req),

@@ -66,6 +66,7 @@ export function validateQuery<T>(schema: ZodSchema<T>, options?: ValidationOptio
       return;
     }
     // Cast so the controller can read coerced + defaulted values via req.query
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (req as any).query = result.data;
     next();
   };

@@ -2,14 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import { metricsMiddleware, metricsStore, getMetrics, isMetricsEnabled } from '../../src/middleware/metrics';
 
 function makeReqRes(path = '/test', method = 'GET') {
-  const listeners: Record<string, Function> = {};
+  const listeners: Record<string, () => void> = {};
   const req = { method, path, route: undefined } as unknown as Request;
   const res = {
-    on: (event: string, cb: Function) => { listeners[event] = cb; },
+    on: (event: string, cb: () => void) => { listeners[event] = cb; },
     emit: (event: string) => listeners[event]?.(),
   } as unknown as Response;
   const next = jest.fn() as NextFunction;
-  return { req, res, next, emit: (e: string) => (res as any).emit(e) };
+  return { req, res, next, emit: (e: string) => listeners[e]?.() };
 }
 
 beforeEach(() => {

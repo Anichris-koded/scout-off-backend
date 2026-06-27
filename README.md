@@ -283,13 +283,13 @@ npm install
 
 ### 2. Build Smart Contracts
 
-> ⚠️ The `contracts/` directory is not yet implemented — see [#216](https://github.com/scout-off/scout-off-backend/issues/216). Skip steps 2–4 and run the backend against a pre-deployed testnet contract.
-
 ```bash
 cd contracts
-cargo build --target wasm32-unknown-unknown --release
-stellar contract optimize --wasm target/wasm32-unknown-unknown/release/scout_off.wasm
+cargo build --release   # .cargo/config.toml defaults target to wasm32-unknown-unknown
+stellar contract optimize --wasm target/wasm32-unknown-unknown/release/register.wasm
 ```
+
+The workspace contains four Soroban contracts (`register`, `progress`, `subscription`, `connection`) and a `shared` utility crate. All compile to WASM stubs ready for business-logic implementation (see issues #197–#202).
 
 ### 3. Deploy to Testnet
 

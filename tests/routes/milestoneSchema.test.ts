@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
-import app from '../../src/index';
+import app from '../../src/app';
 
 async function getValidatorToken(): Promise<string> {
   const kp = Keypair.random();

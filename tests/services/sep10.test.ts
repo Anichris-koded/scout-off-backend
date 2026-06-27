@@ -1,7 +1,6 @@
-import { buildChallenge, verifyAndIssueToken, getServerKeypair } from '../../src/services/sep10';
+import { buildChallenge, verifyAndIssueToken } from '../../src/services/sep10';
 import crypto from 'crypto';
 import { Keypair, Transaction, Networks, TransactionBuilder, BASE_FEE, Operation, Account, Asset } from '@stellar/stellar-sdk';
-import config from '../../src/config';
 
 const clientKeypair = Keypair.random();
 
@@ -204,6 +203,41 @@ describe('sep10', () => {
       const { token, account } = verifyAndIssueToken(signedXdr);
       expect(typeof token).toBe('string');
       expect(account).toBe(clientKeypair.publicKey());
+    });
+  });
+
+  describe('TTL / expiry enforcement', () => {
+    it('throws when challenge maxTime has passed', () => {
+      const xdr = buildChallenge(clientKeypair.publicKey());
+      const tx = new Transaction(xdr, Networks.TESTNET);
+      tx.sign(clientKeypair);
+      const signedXdr = tx.toXDR();
+
+      // Advance Date.now() past the challenge TTL (300 s)
+      const realNow = Date.now;
+      Date.now = () => realNow() + 400_000; // +400 seconds → past maxTime
+      try {
+        expect(() => verifyAndIssueToken(signedXdr)).toThrow('Challenge has expired');
+      } finally {
+        Date.now = realNow;
+      }
+    });
+
+    it('accepts a challenge whose maxTime has not yet passed', () => {
+      const xdr = buildChallenge(clientKeypair.publicKey());
+      const tx = new Transaction(xdr, Networks.TESTNET);
+      tx.sign(clientKeypair);
+      const signedXdr = tx.toXDR();
+
+      // Wind back time slightly to ensure we're before maxTime
+      const realNow = Date.now;
+      Date.now = () => realNow() - 1_000;
+      try {
+        const { token } = verifyAndIssueToken(signedXdr);
+        expect(typeof token).toBe('string');
+      } finally {
+        Date.now = realNow;
+      }
     });
   });
 });

@@ -28,7 +28,7 @@ describe('requireAuth', () => {
     const { req, res, next } = makeReqRes(token);
     requireAuth(req, res, next);
     expect(next).toHaveBeenCalledTimes(1);
-    expect((req as any).account).toBe('GTEST');
+    expect(req.account).toBe('GTEST');
   });
 
   it('returns 401 when Authorization header is missing', () => {

@@ -6,7 +6,6 @@ import { getEvents } from '../db';
 import { invalidateMilestoneCache } from '../services/cache';
 import { recordAudit } from '../utils/audit';
 import { PlayerMilestone } from '../types';
-import { CID_REGEX } from '../utils/cidValidator';
 
 /**
  * Validates that an evidence URI is secure and properly formatted.
@@ -41,7 +40,7 @@ export async function submitMilestoneEvidence(req: Request, res: Response, next:
     // Invalidate milestone + player cache so updated progress tier is reflected
     invalidateMilestoneCache(playerId);
 
-    const validatorWallet = (req as any).account ?? 'unknown';
+    const validatorWallet = req.account ?? 'unknown';
     const correlationId = getCorrelationId(req);
     logger.info(
       `[validator] action=submit_milestone validator=${validatorWallet} playerId=${playerId} milestoneType=${milestoneType} evidenceCid=${evidenceCid} correlationId=${correlationId}`
@@ -65,15 +64,15 @@ export async function getPendingMilestones(req: Request, res: Response, next: Ne
     );
     let pending = submitted.filter((m) => !approvedIds.has(m.milestone_id));
     if (region) pending = pending.filter((m) => m.region === region);
-    if (playerId) pending = pending.filter((m) => m.playerId === playerId || m.player_id === playerId);
+    if (playerId) pending = pending.filter((m) => m.player_id === playerId);
     const milestones: PlayerMilestone[] = pending.map((m) => ({
       status: 'pending' as const,
       approvedBy: m.validator as string || '',
       submittedAt: m.created_at as number || Math.floor(Date.now() / 1000),
-      evidenceUri: m.evidence_uri as string || m.evidenceUri as string || '',
+      evidenceUri: m.evidence_uri as string || '',
     }));
 
-    const validatorWallet = (req as any).account ?? 'unknown';
+    const validatorWallet = req.account ?? 'unknown';
     recordAudit(validatorWallet, 'milestone_approved', { region: region ?? null, playerId: playerId ?? null, pendingCount: milestones.length }, 'pending milestones viewed');
 
     res.json({ success: true, data: milestones });

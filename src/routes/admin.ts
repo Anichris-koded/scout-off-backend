@@ -1,9 +1,7 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, adminDateRangeSchema, withdrawFeesController } from '../controllers/adminController';
-import { introspectToken } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken } from '../controllers/adminController';
 import { exportEvents } from '../controllers/exportController';
-import { requireAuth, requireRole } from '../middleware/auth';
-import { validateQuery } from '../middleware/validate';
+import { requireRole } from '../middleware/auth';
 
 const router = Router();
 

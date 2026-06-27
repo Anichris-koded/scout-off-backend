@@ -1,4 +1,4 @@
-import { SorobanRpc, TransactionBuilder, Networks, BASE_FEE } from '@stellar/stellar-sdk';
+import { SorobanRpc, Networks } from '@stellar/stellar-sdk';
 import config from '../config';
 
 const server = new SorobanRpc.Server(config.sorobanRpcUrl);
@@ -77,6 +77,37 @@ export async function submitContactPayment(
   };
 }
 
+// ─── Trial offer ──────────────────────────────────────────────────────────────
+
+export interface TrialOfferResult {
+  transactionId: string;
+  playerId: string;
+  detailsUri: string;
+  playerTier: number;
+}
+
+/**
+ * Stub: invoke the contract's `log_trial_offer(scout, player_id, details_uri)` method.
+ * Creates an immutable on-chain record of the offer and promotes the player to
+ * Elite Tier (Level 3). Replace with a real Soroban invocation when ready.
+ */
+export async function logTrialOffer(
+  scoutWallet: string,
+  playerId: string,
+  detailsUri: string,
+): Promise<TrialOfferResult> {
+  if (!scoutWallet || !playerId || !detailsUri) {
+    throw new PaymentError('Missing scoutWallet, playerId, or detailsUri', 'INVALID_ACCOUNT');
+  }
+  // TODO: build and submit log_trial_offer Soroban transaction
+  return {
+    transactionId: `stub-txid-${Date.now()}`,
+    playerId,
+    detailsUri,
+    playerTier: 3,
+  };
+}
+
 // ─── Milestone query ──────────────────────────────────────────────────────────
 
 export interface OnChainMilestone {
@@ -140,6 +171,56 @@ export async function withdrawFees(recipient: string): Promise<FeeWithdrawalResu
   //   if (amount === 0n) throw new FeeWithdrawalError('No fees available', 'NO_FEES');
   //   return { transactionId: result.hash, recipient, amount: amount.toString(), token: 'XLM' };
   throw new FeeWithdrawalError('No fees available to withdraw', 'NO_FEES');
+}
+
+export type SubscriptionTier = 'basic' | 'premium';
+
+export interface SubscriptionResult {
+  transactionId: string;
+  tier: SubscriptionTier;
+  expiresAt: number; // Unix timestamp
+  status: 'active';
+}
+
+/**
+ * Stub: invoke subscribe(scout, tier, duration) on the Soroban contract.
+ * Throws PaymentError with code 'INSUFFICIENT_FUNDS' for error code 7 (InsufficientFee).
+ */
+export async function purchaseSubscription(
+  scoutWallet: string,
+  tier: SubscriptionTier,
+  duration: number,
+): Promise<SubscriptionResult> {
+  if (!scoutWallet) {
+    throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
+  }
+  // TODO: build and submit subscribe Soroban transaction
+  const expiresAt = Math.floor(Date.now() / 1000) + duration * 86400;
+  return {
+    transactionId: `stub-sub-txid-${Date.now()}`,
+    tier,
+    expiresAt,
+    status: 'active',
+  };
+export interface UpdateProfileResult {
+  transactionId: string;
+  metadataUri: string;
+}
+
+/**
+ * Stub: invoke the contract's `update_profile(player_id, metadata_uri)` method.
+ * Replace with a real Soroban invocation via invokeContract() when the RPC integration is ready.
+ */
+export async function updateProfile(
+  playerId: string,
+  metadataUri: string,
+): Promise<UpdateProfileResult> {
+  if (!playerId || !metadataUri) {
+    throw new Error('playerId and metadataUri are required');
+  }
+  // TODO: Build and submit update_profile(player_id, metadata_uri) Soroban transaction
+  // Example: await invokeContract(platformKeypair, 'update_profile', [strVal(playerId), strVal(metadataUri)]);
+  return { transactionId: `stub-update-txid-${playerId.slice(0, 8)}`, metadataUri };
 }
 
 /**
