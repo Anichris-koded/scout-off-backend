@@ -1,7 +1,9 @@
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 import { logger } from '../../src/utils/logger';
 import app from '../../src/app';
 import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
+import { auditStore } from '../../src/utils/audit';
 
 jest.mock('../../src/services/ipfs', () => ({
   pinJson: jest.fn().mockResolvedValue('QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64'),
@@ -356,5 +358,37 @@ describe('POST /api/validators/milestone', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ playerId: 'player-1', milestoneType: 'identity' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/players — search audit logging', () => {
+  beforeEach(() => {
+    auditStore.length = 0;
+  });
+
+  it('records an anonymous player_search entry when no auth token is provided', async () => {
+    await request(app).get('/api/players?region=europe');
+    const entry = auditStore.find((e) => e.eventType === 'player_search');
+    expect(entry).toBeDefined();
+    expect(entry!.actorWallet).toBe('anonymous');
+    expect(entry!.eventType).toBe('player_search');
+  });
+
+  it('records a player_search entry linked to the wallet when authenticated', async () => {
+    const scoutWallet = 'GSCOUTABC123XYZWALLET000000000000000000000000000000000000';
+    const token = jwt.sign({ sub: scoutWallet, role: 'scout' }, 'test-secret', { expiresIn: '1h' });
+    await request(app)
+      .get('/api/players?position=striker')
+      .set('Authorization', `Bearer ${token}`);
+    const entry = auditStore.find((e) => e.eventType === 'player_search');
+    expect(entry).toBeDefined();
+    expect(entry!.actorWallet).toBe(scoutWallet);
+  });
+
+  it('still returns 200 and results regardless of auth state', async () => {
+    const res = await request(app).get('/api/players');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
   });
 });

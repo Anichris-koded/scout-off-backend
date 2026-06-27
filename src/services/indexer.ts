@@ -1,6 +1,18 @@
 import { server } from './stellar';
 import config from '../config';
+import { getDb, getLastLedger, setLastLedger } from '../db';
+import { dispatchEventWebhook } from './webhooks';
+import { logger } from '../utils/logger';
 import { getDb, getLastLedger, setLastLedger, upsertPlayer, updatePlayerProgress } from '../db';
+import { logger } from '../utils/logger';
+
+/** Current indexer lag in ledgers (latestChainLedger - lastIndexedLedger). Reset after each poll. */
+export let indexerLedgerLag = 0;
+
+/** Threshold in ledgers above which a warning is logged. Configurable via INDEXER_LAG_WARN_THRESHOLD. */
+function getLagWarnThreshold(): number {
+  return parseInt(process.env.INDEXER_LAG_WARN_THRESHOLD ?? '100', 10);
+}
 
 // ─── Payload normalisation ────────────────────────────────────────────────────
 //
@@ -65,10 +77,27 @@ export async function indexEvents(): Promise<void> {
     filters: [{ type: 'contract', contractIds: [config.contractId] }],
   });
 
+  const lagAfterPoll = Math.max(0, response.latestLedger - (fromLedger > 0 ? fromLedger - 1 : response.latestLedger));
+  indexerLedgerLag = lagAfterPoll;
+  const threshold = getLagWarnThreshold();
+  if (lagAfterPoll > threshold) {
+    logger.warn(`[indexer] ledger lag=${lagAfterPoll} exceeds threshold=${threshold}`);
+  }
+
   if (!response.events.length) return;
+
+  const approvedMilestones: Array<{ type: string; payload: unknown }> = [];
 
   const insertMany = db.transaction((events: typeof response.events) => {
     for (const raw of events) {
+      const eventType = raw.topic[0]?.value() as string;
+      const eventPayload = raw.value?.value() ?? {};
+      const eventId = normalizeEventId(config.contractId, raw.ledger, raw.txHash);
+      onBeforeInsert(eventId);
+      insert.run(eventType, raw.ledger, raw.txHash, JSON.stringify(eventPayload));
+      onAfterInsert(eventId);
+      if (eventType === 'milestone_approved') {
+        approvedMilestones.push({ type: eventType, payload: eventPayload });
       const type = raw.topic[0]?.value() as string;
       const payload = normalizePayload((raw.value?.value() as unknown as Record<string, unknown>) ?? {});
       const eventId = normalizeEventId(config.contractId, raw.ledger, raw.txHash);
@@ -95,6 +124,13 @@ export async function indexEvents(): Promise<void> {
 
   insertMany(response.events);
 
+  for (const { type, payload } of approvedMilestones) {
+    dispatchEventWebhook(type, payload).catch((err: unknown) => {
+      logger.warn(`[indexer] webhook dispatch failed for ${type}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
   const latest = response.events.at(-1)!;
   setLastLedger(latest.ledger + 1);
+  indexerLedgerLag = Math.max(0, response.latestLedger - latest.ledger);
 }
