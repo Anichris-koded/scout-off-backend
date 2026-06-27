@@ -27,11 +27,11 @@ describe("Player profile history", () => {
       .spyOn(stellar, "updateProfile")
       .mockImplementationOnce(async () => ({
         transactionId: "tx-1",
-        metadataUri: "QmMeta1",
+        metadataUri: "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
       }))
       .mockImplementationOnce(async () => ({
         transactionId: "tx-2",
-        metadataUri: "QmMeta2",
+        metadataUri: "QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64",
       }));
 
     // Ensure base player exists in DB via register endpoint.
@@ -41,7 +41,7 @@ describe("Player profile history", () => {
     jest.spyOn(ipfs, "pinJson").mockResolvedValue("QmMetaPinned");
     jest
       .spyOn(ipfs, "gatewayUrl")
-      .mockImplementation((cid: string) => `https://gateway/${cid}`);
+      .mockImplementation((cid: unknown) => `https://gateway/${cid}`);
 
     // Mock webhook dispatch so test doesn't fail.
     const webhooks = require("../../src/services/webhooks");
@@ -54,7 +54,7 @@ describe("Player profile history", () => {
         wallet: PLAYER_WALLET,
         position: "striker",
         region: "europe",
-        metadataUri: "QmMeta0",
+        metadataUri: "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
       });
 
     expect(registerRes.status).toBe(201);
@@ -64,7 +64,7 @@ describe("Player profile history", () => {
     const put1 = await request(app)
       .put(`/api/players/${PLAYER_WALLET}`)
       .set("Authorization", `Bearer ${playerToken}`)
-      .send({ metadataUri: "QmMeta1" });
+      .send({ metadataUri: "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG" });
 
     expect(put1.status).toBe(200);
     expect(put1.body.success).toBe(true);
@@ -73,7 +73,7 @@ describe("Player profile history", () => {
     const put2 = await request(app)
       .put(`/api/players/${PLAYER_WALLET}`)
       .set("Authorization", `Bearer ${playerToken}`)
-      .send({ metadataUri: "QmMeta2" });
+      .send({ metadataUri: "QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64" });
 
     expect(put2.status).toBe(200);
     expect(put2.body.success).toBe(true);
@@ -91,9 +91,9 @@ describe("Player profile history", () => {
     expect(history).toHaveLength(2);
 
     // Newest first (changed_at desc)
-    expect(history[0].metadataUri).toBe("QmMeta2");
+    expect(history[0].metadataUri).toBe("QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64");
     expect(history[0].txHash).toBe("tx-2");
-    expect(history[1].metadataUri).toBe("QmMeta1");
+    expect(history[1].metadataUri).toBe("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG");
     expect(history[1].txHash).toBe("tx-1");
 
     updateProfileSpy.mockRestore();

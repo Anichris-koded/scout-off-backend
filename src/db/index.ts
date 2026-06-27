@@ -235,6 +235,133 @@ function buildPlayerWhereClause(opts: QueryPlayersOptions): { where: string; par
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const sql = `SELECT * FROM players ${where} ORDER BY created_at ASC`;
-  return timedQuery(sql, () => getDb().prepare(sql).all(...params) as PlayerRow[]);
+  return { where, params };
+}
+
+export function queryPlayers(opts: QueryPlayersOptions): PlayerRow[] {
+  const { where, params } = buildPlayerWhereClause(opts);
+  const pagination =
+    opts.limit !== undefined ? ` LIMIT ? OFFSET ?` : '';
+  const sql = `SELECT * FROM players ${where} ORDER BY created_at ASC${pagination}`;
+  const allParams: (string | number)[] = pagination
+    ? [...params, opts.limit!, opts.offset ?? 0]
+    : params;
+  return timedQuery(sql, () => getDb().prepare(sql).all(...allParams) as PlayerRow[]);
+}
+
+export function countPlayers(opts: Omit<QueryPlayersOptions, 'limit' | 'offset'>): number {
+  const { where, params } = buildPlayerWhereClause(opts);
+  const sql = `SELECT COUNT(*) AS count FROM players ${where}`;
+  const row = timedQuery(sql, () =>
+    getDb().prepare(sql).get(...params) as { count: number } | undefined
+  );
+  return row?.count ?? 0;
+}
+
+// ─── Subscription table helpers ───────────────────────────────────────────────
+
+export interface SubscriptionRow {
+  id: number;
+  scout_wallet: string;
+  tier: string;
+  expires_at: number;
+  cancelled_at: number | null;
+  created_at: number;
+}
+
+/** Insert a new subscription record and return its id. */
+export function insertSubscription(p: {
+  scout_wallet: string;
+  tier: string;
+  expires_at: number;
+  created_at: number;
+}): number {
+  const sql = `INSERT INTO subscriptions (scout_wallet, tier, expires_at, created_at)
+               VALUES (?, ?, ?, ?)`;
+  const result = timedQuery(sql, () =>
+    getDb().prepare(sql).run(p.scout_wallet, p.tier, p.expires_at, p.created_at)
+  );
+  return result.lastInsertRowid as number;
+}
+
+/** Return the latest subscription row for a scout (active or expired, but not cancelled). */
+export function getLatestSubscription(scoutWallet: string): SubscriptionRow | null {
+  const sql = `SELECT * FROM subscriptions
+               WHERE scout_wallet = ? AND cancelled_at IS NULL
+               ORDER BY expires_at DESC
+               LIMIT 1`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(scoutWallet) as SubscriptionRow | undefined) ?? null
+  );
+}
+
+/** Extend an existing subscription's expiry and update its tier. */
+export function renewSubscription(p: {
+  id: number;
+  tier: string;
+  expires_at: number;
+}): void {
+  const sql = `UPDATE subscriptions SET tier = ?, expires_at = ? WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(p.tier, p.expires_at, p.id));
+}
+
+/** Mark a subscription as cancelled. */
+export function cancelSubscription(p: {
+  id: number;
+  cancelled_at: number;
+}): void {
+  const sql = `UPDATE subscriptions SET cancelled_at = ? WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(p.cancelled_at, p.id));
+}
+
+// ─── Trial offers table helpers ───────────────────────────────────────────────
+
+export interface TrialOfferRow {
+  id: number;
+  offer_id: string;
+  scout_wallet: string;
+  player_id: string;
+  details_uri: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  reject_reason: string | null;
+  responded_at: number | null;
+  created_at: number;
+}
+
+/** Insert a new trial offer record. */
+export function insertTrialOffer(p: {
+  offer_id: string;
+  scout_wallet: string;
+  player_id: string;
+  details_uri: string;
+  created_at: number;
+}): void {
+  const sql = `INSERT OR IGNORE INTO trial_offers (offer_id, scout_wallet, player_id, details_uri, status, created_at)
+               VALUES (?, ?, ?, ?, 'pending', ?)`;
+  timedQuery(sql, () =>
+    getDb().prepare(sql).run(p.offer_id, p.scout_wallet, p.player_id, p.details_uri, p.created_at)
+  );
+}
+
+/** Fetch a trial offer by its id. */
+export function getTrialOfferById(offerId: string): TrialOfferRow | null {
+  const sql = `SELECT * FROM trial_offers WHERE offer_id = ?`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(offerId) as TrialOfferRow | undefined) ?? null
+  );
+}
+
+/** Update a trial offer's status (accept or reject). */
+export function respondToTrialOffer(p: {
+  offer_id: string;
+  status: 'accepted' | 'rejected';
+  reject_reason?: string;
+  responded_at: number;
+}): void {
+  const sql = `UPDATE trial_offers
+               SET status = ?, reject_reason = ?, responded_at = ?
+               WHERE offer_id = ?`;
+  timedQuery(sql, () =>
+    getDb().prepare(sql).run(p.status, p.reject_reason ?? null, p.responded_at, p.offer_id)
+  );
 }

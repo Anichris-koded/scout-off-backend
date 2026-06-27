@@ -1,9 +1,7 @@
 import { server } from './stellar';
 import config from '../config';
-import { getDb, getLastLedger, setLastLedger } from '../db';
-import { dispatchEventWebhook } from './webhooks';
-import { logger } from '../utils/logger';
 import { getDb, getLastLedger, setLastLedger, upsertPlayer, updatePlayerProgress } from '../db';
+import { dispatchEventWebhook } from './webhooks';
 import { logger } from '../utils/logger';
 
 /** Current indexer lag in ledgers (latestChainLedger - lastIndexedLedger). Reset after each poll. */
@@ -90,14 +88,6 @@ export async function indexEvents(): Promise<void> {
 
   const insertMany = db.transaction((events: typeof response.events) => {
     for (const raw of events) {
-      const eventType = raw.topic[0]?.value() as string;
-      const eventPayload = raw.value?.value() ?? {};
-      const eventId = normalizeEventId(config.contractId, raw.ledger, raw.txHash);
-      onBeforeInsert(eventId);
-      insert.run(eventType, raw.ledger, raw.txHash, JSON.stringify(eventPayload));
-      onAfterInsert(eventId);
-      if (eventType === 'milestone_approved') {
-        approvedMilestones.push({ type: eventType, payload: eventPayload });
       const type = raw.topic[0]?.value() as string;
       const payload = normalizePayload((raw.value?.value() as unknown as Record<string, unknown>) ?? {});
       const eventId = normalizeEventId(config.contractId, raw.ledger, raw.txHash);
@@ -118,6 +108,7 @@ export async function indexEvents(): Promise<void> {
         const playerId = payload.player_id as string;
         const level = Number(payload.progress_level ?? 0);
         if (playerId) updatePlayerProgress(playerId, level);
+        approvedMilestones.push({ type, payload });
       }
     }
   });
