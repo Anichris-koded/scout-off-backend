@@ -16,6 +16,25 @@ import { checkHealth } from './services/ipfs';
 import { API_PREFIX, API_V1_PREFIX } from './config';
 import { getMetrics } from './middleware/metrics';
 import { indexerLedgerLag } from './services/indexer';
+import { getDb } from './db';
+
+/** Probe the SQLite database with a lightweight SELECT 1.
+ *  Resolves 'ok' or 'error'; never rejects.
+ *  A configurable timeout (default 2 s) guards against a locked DB hanging the health check.
+ */
+async function probeDb(timeoutMs = 2_000): Promise<'ok' | 'error'> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('error'), timeoutMs);
+    try {
+      getDb().prepare('SELECT 1').get();
+      clearTimeout(timer);
+      resolve('ok');
+    } catch {
+      clearTimeout(timer);
+      resolve('error');
+    }
+  });
+}
 
 const app = express();
 
@@ -37,6 +56,8 @@ app.get('/health', async (_req, res) => {
   } else {
     healthStatus.stellar = 'disabled';
   }
+
+  healthStatus.db = await probeDb();
 
   res.json({ status: 'ok', healthStatus });
 });
@@ -63,6 +84,10 @@ app.get('/ready', async (_req, res) => {
   } else {
     services.stellar = 'disabled';
   }
+
+  // Check database — a locked or corrupted DB causes 503
+  const dbStatus = await probeDb();
+  services.db = dbStatus === 'ok' ? 'ok' : 'unavailable';
 
   const allOk = Object.values(services).every(v => v === 'ok' || v === 'disabled');
   if (allOk) {
@@ -100,6 +125,10 @@ app.get('/health/readiness', async (_req, res) => {
   } else {
     services.stellar = 'disabled';
   }
+
+  // Check database — a locked or corrupted DB causes 503
+  const dbStatus = await probeDb();
+  services.db = dbStatus === 'ok' ? 'ok' : 'unavailable';
 
   const allOk = Object.values(services).every(v => v === 'ok' || v === 'disabled');
   if (allOk) {
