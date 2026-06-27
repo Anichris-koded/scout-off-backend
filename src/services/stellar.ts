@@ -202,6 +202,8 @@ export async function purchaseSubscription(
     expiresAt,
     status: 'active',
   };
+}
+
 export interface UpdateProfileResult {
   transactionId: string;
   metadataUri: string;

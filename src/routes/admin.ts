@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex } from '../controllers/adminController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
 
@@ -134,5 +134,18 @@ router.post('/contract/unpause', requireRole('admin'), unpauseContract);
  * @auth Bearer (admin role required)
  */
 router.post('/introspect', requireRole('admin'), introspectToken);
+
+/**
+ * POST /api/admin/indexer/reindex
+ *
+ * Resets the indexer's stored last_ledger to the given fromLedger value,
+ * causing the next poll cycle to replay all events from that ledger onward.
+ *
+ * @body fromLedger {number} - Ledger sequence number to replay from
+ * @response 200 { success: true, data: { fromLedger, previous } }
+ * @response 400 { success: false, error: string } - Invalid fromLedger
+ * @auth Bearer (admin role required)
+ */
+router.post('/indexer/reindex', requireRole('admin'), reindex);
 
 export default router;

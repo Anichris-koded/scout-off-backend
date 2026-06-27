@@ -70,6 +70,9 @@ const config = {
   logLevel: (process.env.LOG_LEVEL ?? ENV_LOG_LEVEL[nodeEnv]) as LogLevel,
   showErrorDetails: nodeEnv === 'development' || nodeEnv === 'test',
   useMockServices: nodeEnv === 'development' || nodeEnv === 'test',
+  backfillFromLedger: process.env.INDEXER_BACKFILL_FROM_LEDGER
+    ? parseInt(process.env.INDEXER_BACKFILL_FROM_LEDGER, 10)
+    : null,
 };
 
 export default config;

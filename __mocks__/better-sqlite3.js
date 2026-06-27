@@ -17,6 +17,9 @@ class Statement {
       if (!this._db._events.find((e) => e.tx_hash === txHash)) {
         this._db._events.push({ type, ledger, tx_hash: txHash, payload });
       }
+    } else if (sql.startsWith('INSERT INTO MIGRATIONS')) {
+      const [id, appliedAt] = args;
+      this._db._migrations.set(id, { id, applied_at: appliedAt });
     } else if (sql.startsWith('INSERT INTO INDEXER_STATE') || sql.startsWith('INSERT OR REPLACE INTO INDEXER_STATE')) {
       const [key, value] = args;
       this._db._state.set(key, value);
@@ -63,6 +66,21 @@ class Statement {
         : this._db._events;
       return { count: rows.length };
     }
+    if (sql.includes('COUNT(*)') && sql.includes('FROM PLAYERS')) {
+      let rows = [...this._db._players];
+      const whereMatch = sql.match(/WHERE (.+?)(?:ORDER|$)/);
+      if (whereMatch) {
+        const conditions = whereMatch[1].split(' AND ');
+        let argIdx = 0;
+        for (const cond of conditions) {
+          const val = args[argIdx++];
+          if (cond.includes('REGION = ?')) rows = rows.filter((r) => r.region === val);
+          else if (cond.includes('POSITION = ?')) rows = rows.filter((r) => r.position === val);
+          else if (cond.includes('PROGRESS_LEVEL >= ?')) rows = rows.filter((r) => r.progress_level >= val);
+        }
+      }
+      return { count: rows.length };
+    }
     return undefined;
   }
 
@@ -88,7 +106,6 @@ class Statement {
     }
     if (sql.includes('FROM PLAYERS')) {
       let rows = [...this._db._players];
-      // Parse WHERE conditions from remaining args in order
       const whereMatch = sql.match(/WHERE (.+?)(?:ORDER|$)/);
       if (whereMatch) {
         const conditions = whereMatch[1].split(' AND ');
@@ -99,6 +116,11 @@ class Statement {
           else if (cond.includes('POSITION = ?')) rows = rows.filter((r) => r.position === val);
           else if (cond.includes('PROGRESS_LEVEL >= ?')) rows = rows.filter((r) => r.progress_level >= val);
         }
+      }
+      if (sql.includes('LIMIT ?')) {
+        const limit = args[args.length - 2];
+        const offset = args[args.length - 1] ?? 0;
+        rows = rows.slice(offset, offset + limit);
       }
       return rows;
     }
@@ -111,6 +133,7 @@ class Database {
     this._events = [];
     this._state = new Map();
     this._players = [];
+    this._migrations = new Map();
   }
 
   exec(_sql) {

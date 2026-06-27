@@ -4,6 +4,15 @@ import { getDb, getLastLedger, setLastLedger } from '../db';
 import { dispatchEventWebhook } from './webhooks';
 import { logger } from '../utils/logger';
 import { getDb, getLastLedger, setLastLedger, upsertPlayer, updatePlayerProgress } from '../db';
+import { logger } from '../utils/logger';
+
+/** Current indexer lag in ledgers (latestChainLedger - lastIndexedLedger). Reset after each poll. */
+export let indexerLedgerLag = 0;
+
+/** Threshold in ledgers above which a warning is logged. Configurable via INDEXER_LAG_WARN_THRESHOLD. */
+function getLagWarnThreshold(): number {
+  return parseInt(process.env.INDEXER_LAG_WARN_THRESHOLD ?? '100', 10);
+}
 
 // ─── Payload normalisation ────────────────────────────────────────────────────
 //
@@ -68,6 +77,13 @@ export async function indexEvents(): Promise<void> {
     filters: [{ type: 'contract', contractIds: [config.contractId] }],
   });
 
+  const lagAfterPoll = Math.max(0, response.latestLedger - (fromLedger > 0 ? fromLedger - 1 : response.latestLedger));
+  indexerLedgerLag = lagAfterPoll;
+  const threshold = getLagWarnThreshold();
+  if (lagAfterPoll > threshold) {
+    logger.warn(`[indexer] ledger lag=${lagAfterPoll} exceeds threshold=${threshold}`);
+  }
+
   if (!response.events.length) return;
 
   const approvedMilestones: Array<{ type: string; payload: unknown }> = [];
@@ -116,4 +132,5 @@ export async function indexEvents(): Promise<void> {
 
   const latest = response.events.at(-1)!;
   setLastLedger(latest.ledger + 1);
+  indexerLedgerLag = Math.max(0, response.latestLedger - latest.ledger);
 }
