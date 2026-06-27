@@ -37,7 +37,7 @@ export async function postWebhookWithRetry(
         throw new Error(`Webhook dispatch failed with status ${response.status}`);
       }
       return;
-    } catch (err: any) {
+    } catch (err) {
       lastError = err;
     }
 

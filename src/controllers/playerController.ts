@@ -2,12 +2,12 @@ import { Request, Response, NextFunction } from 'express';
 import { sanitizeInput } from '../utils/sanitizer';
 import { z } from 'zod';
 import { CID_REGEX } from '../utils/cidValidator';
-import { pinJson, gatewayUrl } from '../services/ipfs';
+import { pinJson } from '../services/ipfs';
 import { serializeIpfsResult } from '../utils/ipfsSerializer';
-import { getEvents } from '../db';
-import { queryMilestones } from '../services/stellar';
+import { getEvents, getPlayerById, queryPlayers } from '../db';
+import { queryMilestones, updateProfile } from '../services/stellar';
 import { invalidatePlayerCache } from '../services/cache';
-import { ApiResponse, ProgressLevel } from '../types';
+import { ApiResponse } from '../types';
 import { getTierMeta } from '../utils/tier';
 import { validateMinTier } from '../utils/minTierValidator';
 import { normalizePosition } from '../utils/positionAliases';
@@ -67,9 +67,9 @@ export async function registerPlayer(req: Request, res: Response, next: NextFunc
       position: sanitizedPosition,
       region: sanitizedRegion,
     });
-    const body: ApiResponse<typeof ipfsResult & { metadataUri: string }> = {
+    const body: ApiResponse<typeof ipfsResult & { metadataUri: string; gatewayUrl: string }> = {
       success: true,
-      data: { ...ipfsResult, metadataUri },
+      data: { ...ipfsResult, metadataUri, gatewayUrl: ipfsResult.uri },
     };
     res.status(201).json(body);
   } catch (err) {
@@ -81,17 +81,26 @@ export async function registerPlayer(req: Request, res: Response, next: NextFunc
 export async function getPlayer(req: Request, res: Response, next: NextFunction) {
   try {
     const playerId = sanitizeInput(req.params.playerId);
-    const events = getEvents('player_registered').filter(
-      (e) => e.payload.player_id === playerId
-    );
-    if (!events.length) {
+    const row = getPlayerById(playerId);
+    if (!row) {
       res.status(404).json({ success: false, error: 'Player not found' });
       return;
     }
-    const payload = events[0].payload;
-    const level = Number(payload.progress_level ?? 0);
-    const { tierName, tierDescription } = getTierMeta(level);
-    res.json({ success: true, data: { ...payload, tierName, tierDescription } });
+    const { tierName, tierDescription } = getTierMeta(row.progress_level);
+    res.json({
+      success: true,
+      data: {
+        player_id: row.player_id,
+        wallet: row.wallet,
+        position: row.position,
+        region: row.region,
+        metadataUri: row.metadata_uri,
+        progress_level: row.progress_level,
+        created_at: row.created_at,
+        tierName,
+        tierDescription,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -111,20 +120,24 @@ export async function filterPlayers(req: Request, res: Response, next: NextFunct
     const sanitizedPosition = position ? sanitizeInput(position) : undefined;
     const normalizedPosition = sanitizedPosition ? normalizePosition(sanitizedPosition) : undefined;
 
-    let players = getEvents('player_registered').map((e) => e.payload);
-    if (sanitizedRegion) players = players.filter((p) => p.region === sanitizedRegion);
-    if (normalizedPosition || sanitizedPosition) {
-      const match = normalizedPosition ?? sanitizedPosition;
-      players = players.filter((p) => p.position === match);
-    }
-    if (minTier !== undefined)
-      players = players.filter((p) => Number(p.progress_level) >= minTier);
-    const total = players.length;
+    const rows = queryPlayers({
+      region: sanitizedRegion,
+      position: normalizedPosition ?? sanitizedPosition,
+      minTier,
+    });
+
+    const total = rows.length;
     const pages = Math.ceil(total / pageSize);
-    const paginated = players.slice((page - 1) * pageSize, page * pageSize);
-    const enriched = paginated.map((p) => ({
-      ...p,
-      ...enrichPlayerResult(Number(p.progress_level ?? 0)),
+    const paginated = rows.slice((page - 1) * pageSize, page * pageSize);
+    const enriched = paginated.map((row) => ({
+      player_id: row.player_id,
+      wallet: row.wallet,
+      position: row.position,
+      region: row.region,
+      metadataUri: row.metadata_uri,
+      progress_level: row.progress_level,
+      created_at: row.created_at,
+      ...enrichPlayerResult(row.progress_level),
     }));
     res.json({ success: true, data: enriched, total, page, pageSize, pages });
   } catch (err) {
@@ -132,21 +145,21 @@ export async function filterPlayers(req: Request, res: Response, next: NextFunct
   }
 }
 
-/**
- * PUT /api/players/:playerId
- * Required permissions: caller must be the profile owner (JWT sub === playerId).
- * Stub — returns 202 Accepted until on-chain update is wired.
- */
-export const updatePlayerSchema = z.object({
-  position: z.string().min(1).optional(),
-  region: z.string().min(1).optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
+/** PUT /api/players/:playerId — profile owner only */
+export const updatePlayerSchema = z.union([
+  z.object({ metadata: z.record(z.unknown()) }),
+  z.object({ metadataUri: metadataUriSchema }),
+]);
 
 export async function updatePlayer(req: Request, res: Response, next: NextFunction) {
   try {
-    updatePlayerSchema.parse(req.body);
-    res.status(202).json({ success: true, message: 'Profile update accepted' });
+    const playerId = sanitizeInput(req.params.playerId);
+    const parsed = updatePlayerSchema.parse(req.body);
+    const metadataUri = 'metadata' in parsed
+      ? await pinJson({ playerId, ...parsed.metadata })
+      : parsed.metadataUri;
+    const result = await updateProfile(playerId, metadataUri);
+    res.status(200).json({ success: true, data: { transactionId: result.transactionId, metadataUri } });
   } catch (err) {
     next(err);
   }
@@ -161,13 +174,23 @@ const milestonesQuerySchema = z.object({
 export async function getPlayerMilestones(req: Request, res: Response, next: NextFunction) {
   try {
     const playerId = sanitizeInput(req.params.playerId);
-    // Fetch indexed (off-chain) events from the local event store
-    const indexedMilestones = getEvents('milestone_approved').filter(
-      (e) => e.payload.player_id === playerId
-    );
-    // Fetch on-chain milestones from the Soroban contract stub
+    const parsed = milestonesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid query parameters' });
+      return;
+    }
+    const { sortBy, order } = parsed.data;
+    const indexedMilestones = getEvents('milestone_approved')
+      .filter((e) => e.payload.player_id === playerId)
+      .map((e) => ({ ...e.payload }));
     const onChainMilestones = await queryMilestones(playerId);
-    res.json({ success: true, data: { indexed: indexedMilestones, onChain: onChainMilestones } });
+    const combined = [...indexedMilestones, ...(onChainMilestones as unknown as Record<string, unknown>[])];
+    combined.sort((a, b) => {
+      const av = Number(a[sortBy] ?? 0);
+      const bv = Number(b[sortBy] ?? 0);
+      return order === 'asc' ? av - bv : bv - av;
+    });
+    res.json({ success: true, data: combined });
   } catch (err) {
     next(err);
   }

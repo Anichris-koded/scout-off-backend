@@ -20,8 +20,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
   try {
     const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
-    (req as any).account = payload.sub;
-    (req as any).role = payload.role;
+    req.account = payload.sub;
+    req.role = payload.role;
     next();
   } catch {
     console.warn({ method: req.method, path: req.path, error: 'Invalid or expired token' });
@@ -62,8 +62,8 @@ export function requireRole(role: string) {
         return;
       }
 
-      (req as any).account = payload.sub;
-      (req as any).role = payload.role;
+      req.account = payload.sub;
+      req.role = payload.role;
       next();
     } catch {
       console.warn({ method: req.method, path: req.path, error: 'Invalid or expired token', requiredRole: role });
@@ -94,8 +94,8 @@ export function requireRoles(...roles: string[]) {
         sendForbidden(res, 'Insufficient permissions');
         return;
       }
-      (req as any).account = payload.sub;
-      (req as any).role = payload.role;
+      req.account = payload.sub;
+      req.role = payload.role;
       next();
     } catch {
       sendUnauthorized(res, 'Invalid or expired token');

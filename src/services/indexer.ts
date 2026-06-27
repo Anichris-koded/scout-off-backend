@@ -1,6 +1,32 @@
 import { server } from './stellar';
 import config from '../config';
-import { getDb, getLastLedger, setLastLedger } from '../db';
+import { getDb, getLastLedger, setLastLedger, upsertPlayer, updatePlayerProgress } from '../db';
+import { logger } from '../utils/logger';
+
+/** Current indexer lag in ledgers (latestChainLedger - lastIndexedLedger). Reset after each poll. */
+export let indexerLedgerLag = 0;
+
+/** Threshold in ledgers above which a warning is logged. Configurable via INDEXER_LAG_WARN_THRESHOLD. */
+function getLagWarnThreshold(): number {
+  return parseInt(process.env.INDEXER_LAG_WARN_THRESHOLD ?? '100', 10);
+}
+
+// ─── Payload normalisation ────────────────────────────────────────────────────
+//
+// The Soroban contract emits events with snake_case field names but some events
+// arrive with camelCase keys. normalizePayload() converts every camelCase key to
+// snake_case on ingest so all DB reads can use a single canonical naming style.
+
+function camelToSnake(key: string): string {
+  return key.replace(/([A-Z])/g, '_$1').toLowerCase();
+}
+
+/** Convert every camelCase key in a payload to snake_case. */
+export function normalizePayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(payload).map(([k, v]) => [camelToSnake(k), v])
+  );
+}
 
 // ─── Deduplication strategy ───────────────────────────────────────────────────
 //
@@ -48,19 +74,38 @@ export async function indexEvents(): Promise<void> {
     filters: [{ type: 'contract', contractIds: [config.contractId] }],
   });
 
+  const lagAfterPoll = Math.max(0, response.latestLedger - (fromLedger > 0 ? fromLedger - 1 : response.latestLedger));
+  indexerLedgerLag = lagAfterPoll;
+  const threshold = getLagWarnThreshold();
+  if (lagAfterPoll > threshold) {
+    logger.warn(`[indexer] ledger lag=${lagAfterPoll} exceeds threshold=${threshold}`);
+  }
+
   if (!response.events.length) return;
 
   const insertMany = db.transaction((events: typeof response.events) => {
     for (const raw of events) {
+      const type = raw.topic[0]?.value() as string;
+      const payload = normalizePayload((raw.value?.value() as unknown as Record<string, unknown>) ?? {});
       const eventId = normalizeEventId(config.contractId, raw.ledger, raw.txHash);
       onBeforeInsert(eventId);
-      insert.run(
-        raw.topic[0]?.value() as string,
-        raw.ledger,
-        raw.txHash,
-        JSON.stringify(raw.value?.value() ?? {})
-      );
+      insert.run(type, raw.ledger, raw.txHash, JSON.stringify(payload));
       onAfterInsert(eventId);
+
+      if (type === 'player_registered') {
+        upsertPlayer({
+          player_id: payload.player_id as string,
+          wallet: payload.wallet as string,
+          position: payload.position as string | undefined,
+          region: payload.region as string | undefined,
+          metadata_uri: payload.metadata_uri as string | undefined,
+          created_at: raw.ledger,
+        });
+      } else if (type === 'milestone_approved') {
+        const playerId = payload.player_id as string;
+        const level = Number(payload.progress_level ?? 0);
+        if (playerId) updatePlayerProgress(playerId, level);
+      }
     }
   });
 
@@ -68,4 +113,5 @@ export async function indexEvents(): Promise<void> {
 
   const latest = response.events.at(-1)!;
   setLastLedger(latest.ledger + 1);
+  indexerLedgerLag = Math.max(0, response.latestLedger - latest.ledger);
 }

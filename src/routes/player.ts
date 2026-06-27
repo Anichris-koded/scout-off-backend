@@ -10,7 +10,7 @@ import {
   updatePlayerSchema,
 } from '../controllers/playerController';
 import { validateBody, validateQuery } from '../middleware/validate';
-import { requireAuth } from '../middleware/auth';
+import { requireRole } from '../middleware/auth';
 import { requireOwner } from '../middleware/requireOwner';
 
 const router = Router();
@@ -30,6 +30,7 @@ const router = Router();
 router.get('/', validateQuery(filterSchema), filterPlayers);
 router.post(
   '/register',
+  requireRole('player'),
   validateBody(registerSchema, { context: 'player_registration' }),
   registerPlayer
 );
@@ -47,6 +48,6 @@ router.get('/:playerId', getPlayer);
  */
 router.get('/:playerId/milestones', getPlayerMilestones);
 // Profile owner only — requireAuth sets req.account; requireOwner checks it matches :playerId
-router.put('/:playerId', requireAuth, requireOwner, validateBody(updatePlayerSchema), updatePlayer);
+router.put('/:playerId', requireRole('player'), requireOwner, validateBody(updatePlayerSchema), updatePlayer);
 
 export default router;

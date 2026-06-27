@@ -1,4 +1,4 @@
-import { recordAudit, queryAudit, auditStore, AuditEntry } from '../../src/utils/audit';
+import { recordAudit, queryAudit, auditStore } from '../../src/utils/audit';
 
 beforeEach(() => {
   auditStore.length = 0;

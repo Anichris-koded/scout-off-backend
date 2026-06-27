@@ -1,6 +1,6 @@
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
-import app from '../../src/index';
+import app from '../../src/app';
 
 const SECRET = process.env.JWT_SECRET ?? 'test-secret';
 
@@ -31,6 +31,7 @@ function makeToken(wallet: string, role: string): string {
 const VALIDATOR_WALLET = 'GVALIDATOR1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const PLAYER_WALLET = 'GPLAYER1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const SCOUT_WALLET = 'GSCOUT1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const ADMIN_WALLET = 'GADMIN1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 beforeEach(() => {
   mockGetEvents.mockReset();
@@ -42,7 +43,7 @@ describe('POST /api/validators/milestone', () => {
   const validPayload = {
     playerId: 'player-123',
     milestoneType: 'performance',
-    evidenceUri: 'QmEvidenceCid',
+    evidenceUri: 'ipfs://QmEvidenceCid',
   };
 
   it('returns 401 when no token is provided', async () => {
@@ -67,6 +68,17 @@ describe('POST /api/validators/milestone', () => {
     const res = await request(app)
       .post('/api/validators/milestone')
       .set('Authorization', `Bearer ${scoutToken}`)
+      .send(validPayload);
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Insufficient permissions');
+  });
+
+  it('returns 403 when user is an admin', async () => {
+    const adminToken = makeToken(ADMIN_WALLET, 'admin');
+    const res = await request(app)
+      .post('/api/validators/milestone')
+      .set('Authorization', `Bearer ${adminToken}`)
       .send(validPayload);
     expect(res.status).toBe(403);
     expect(res.body.success).toBe(false);
@@ -123,6 +135,16 @@ describe('GET /api/validators/milestones/pending', () => {
     expect(res.body.error).toBe('Insufficient permissions');
   });
 
+  it('returns 403 when user is an admin', async () => {
+    const adminToken = makeToken(ADMIN_WALLET, 'admin');
+    const res = await request(app)
+      .get('/api/validators/milestones/pending')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Insufficient permissions');
+  });
+
   it('returns 200 with empty array when validator has no pending milestones', async () => {
     mockGetEvents.mockReturnValue([]);
     const validatorToken = makeToken(VALIDATOR_WALLET, 'validator');
@@ -142,7 +164,7 @@ describe('GET /api/validators/milestones/pending', () => {
           {
             payload: {
               milestone_id: 'm1',
-              playerId: 'player-1',
+              player_id: 'player-1',
               region: 'EU',
               validator: VALIDATOR_WALLET,
               created_at: submittedAt,
@@ -178,7 +200,7 @@ describe('GET /api/validators/milestones/pending', () => {
           {
             payload: {
               milestone_id: 'm1',
-              playerId: 'player-1',
+              player_id: 'player-1',
               region: 'EU',
               created_at: submittedAt,
               evidence_uri: 'QmEvidence1',
@@ -187,7 +209,7 @@ describe('GET /api/validators/milestones/pending', () => {
           {
             payload: {
               milestone_id: 'm2',
-              playerId: 'player-2',
+              player_id: 'player-2',
               region: 'NA',
               created_at: submittedAt,
               evidence_uri: 'QmEvidence2',
@@ -219,7 +241,7 @@ describe('GET /api/validators/milestones/pending', () => {
           {
             payload: {
               milestone_id: 'm1',
-              playerId: 'player-1',
+              player_id: 'player-1',
               region: 'EU',
               created_at: submittedAt,
               evidence_uri: 'QmEvidence1',
@@ -228,7 +250,7 @@ describe('GET /api/validators/milestones/pending', () => {
           {
             payload: {
               milestone_id: 'm2',
-              playerId: 'player-2',
+              player_id: 'player-2',
               region: 'EU',
               created_at: submittedAt,
               evidence_uri: 'QmEvidence2',

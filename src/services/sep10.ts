@@ -86,6 +86,12 @@ export function verifyAndIssueToken(xdr: string, role?: string): { token: string
 
   const tx = new Transaction(xdr, network);
 
+  // Enforce challenge TTL — reject expired challenges to prevent replay attacks
+  const maxTime = Number(tx.timeBounds?.maxTime ?? 0);
+  if (maxTime > 0 && Math.floor(Date.now() / 1000) > maxTime) {
+    throw new Error('Challenge has expired');
+  }
+
   // Validate challenge transaction structure
   if (!tx.operations || tx.operations.length === 0) {
     throw new Error('Invalid challenge: no operations found');

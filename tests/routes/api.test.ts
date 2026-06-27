@@ -11,6 +11,8 @@ jest.mock('../../src/services/ipfs', () => ({
 
 jest.mock('../../src/db', () => ({
   getEvents: jest.fn().mockReturnValue([]),
+  queryPlayers: jest.fn().mockReturnValue([]),
+  getPlayerById: jest.fn().mockReturnValue(null),
 }));
 
 jest.mock('../../src/services/indexer', () => ({
@@ -63,9 +65,29 @@ describe('POST /api/players/register', () => {
     metadataUri: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
   };
 
-  it('rejects invalid metadataUri values with 400', async () => {
+  it('returns 401 when no token is provided', async () => {
     const res = await request(app)
       .post('/api/players/register')
+      .send(validPlayer);
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('returns 403 when authenticated as non-player role', async () => {
+    const token = await getValidatorToken();
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send(validPlayer);
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('rejects invalid metadataUri values with 400', async () => {
+    const token = await getPlayerToken();
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
       .send({ ...validPlayer, metadataUri: 'invalid-cid' });
 
     expect(res.status).toBe(400);
@@ -73,8 +95,10 @@ describe('POST /api/players/register', () => {
   });
 
   it('accepts registration payloads with valid metadataUri', async () => {
+    const token = await getPlayerToken();
     const res = await request(app)
       .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
       .send(validPlayer);
 
     expect(res.status).toBe(201);
