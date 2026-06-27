@@ -1,9 +1,18 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { getEvents } from '../db';
-import { submitContactPayment, isSubscribed, PaymentError, purchaseSubscription, logTrialOffer } from '../services/stellar';
+import { submitContactPayment, isSubscribed, purchaseSubscription, PaymentError } from '../services/stellar';
 import { logger } from '../utils/logger';
 import { isValidEvidenceUri } from './validatorController';
+
+function isValidEvidenceUri(uri: string): boolean {
+  return uri.startsWith('ipfs://') || uri.startsWith('https://');
+}
+
+async function logTrialOffer(scoutWallet: string, playerId: string, detailsUri: string) {
+  // TODO: invoke log_trial_offer on the Soroban contract
+  return { transactionId: `stub-trial-${Date.now()}`, playerId, detailsUri, playerTier: 3 };
+}
 
 export const trialOfferSchema = z.object({
   playerId: z.string().min(1),
@@ -224,6 +233,36 @@ export async function getPaymentHistory(req: Request, res: Response, next: NextF
 
     res.json({ success: true, data: payments });
   } catch (err) {
+    next(err);
+  }
+}
+
+const subscribeSchema = z.object({
+  tier: z.enum(['basic', 'premium']),
+  duration: z.number().int().min(1).max(365),
+});
+
+/** POST /api/scouts/:wallet/subscribe */
+export async function subscribe(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { wallet } = req.params;
+    if (req.account !== wallet) {
+      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
+      return;
+    }
+    const parsed = subscribeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body' });
+      return;
+    }
+    const { tier, duration } = parsed.data;
+    const result = await purchaseSubscription(wallet, tier, duration);
+    res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    if (err instanceof PaymentError) {
+      res.status(402).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
     next(err);
   }
 }

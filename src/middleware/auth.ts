@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import config from '../config';
 import { JwtPayload } from '../types';
 import { sendUnauthorized, sendForbidden } from '../utils/authError';
+import { logger } from '../utils/logger';
 
 export interface AuthPayload extends jwt.JwtPayload, Partial<JwtPayload> {}
 
@@ -14,7 +15,7 @@ export interface AuthPayload extends jwt.JwtPayload, Partial<JwtPayload> {}
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
-    console.warn({ method: req.method, path: req.path, error: 'Missing auth token' });
+    logger.warn({ method: req.method, path: req.path, error: 'Missing auth token' });
     sendUnauthorized(res, 'Missing auth token');
     return;
   }
@@ -24,7 +25,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     req.role = payload.role;
     next();
   } catch {
-    console.warn({ method: req.method, path: req.path, error: 'Invalid or expired token' });
+    logger.warn({ method: req.method, path: req.path, error: 'Invalid or expired token' });
     sendUnauthorized(res, 'Invalid or expired token');
   }
 }
@@ -41,7 +42,7 @@ export function requireRole(role: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) {
-      console.warn({ method: req.method, path: req.path, error: 'Missing auth token', requiredRole: role });
+      logger.warn({ method: req.method, path: req.path, error: 'Missing auth token', requiredRole: role });
       sendUnauthorized(res, 'Missing auth token');
       return;
     }
@@ -49,9 +50,9 @@ export function requireRole(role: string) {
     try {
       const token = header.slice(7);
       const payload = jwt.verify(token, config.jwtSecret) as AuthPayload;
-      
+
       if (payload.role !== role) {
-        console.warn({
+        logger.warn({
           method: req.method,
           path: req.path,
           error: 'Insufficient permissions',
@@ -66,7 +67,7 @@ export function requireRole(role: string) {
       req.role = payload.role;
       next();
     } catch {
-      console.warn({ method: req.method, path: req.path, error: 'Invalid or expired token', requiredRole: role });
+      logger.warn({ method: req.method, path: req.path, error: 'Invalid or expired token', requiredRole: role });
       sendUnauthorized(res, 'Invalid or expired token');
     }
   };

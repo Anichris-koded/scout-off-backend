@@ -65,7 +65,8 @@ export function postToken(req: Request, res: Response, next: NextFunction): void
   } catch (err) {
     if (err instanceof Error && (
       err.message === 'Invalid challenge signature' ||
-      err.message === 'Missing source account in challenge'
+      err.message === 'Missing source account in challenge' ||
+      err.message === 'Challenge has expired'
     )) {
       let attemptedWallet: string | null = null;
       try { attemptedWallet = extractAccount((req.body as { transaction?: string }).transaction ?? ''); } catch { /* not extractable */ }

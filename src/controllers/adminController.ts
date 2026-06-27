@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
-import { getEvents, getEventsCount } from '../db';
-import { ApiResponse, EventRecord, ContractEventType } from '../types';
+import { getEvents, getLastLedger, setLastLedger } from '../db';
+import { ApiResponse, EventRecord } from '../types';
 import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult } from '../services/stellar';
 import config from '../config';
+import { logger } from '../utils/logger';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
@@ -110,12 +111,12 @@ export async function registerValidator(req: Request, res: Response, next: NextF
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
-      console.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
+      logger.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
       res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
       return;
     }
 
-    console.info(`[admin] action=register_validator admin=${adminWallet} target=${validatorWallet}`);
+    logger.info(`[admin] action=register_validator admin=${adminWallet} target=${validatorWallet}`);
     // TODO: invoke register_validator on Soroban contract
     res.status(202).json({ success: true, message: `Validator ${validatorWallet} registration submitted` });
   } catch (err) {
@@ -130,12 +131,12 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
-      console.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
+      logger.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
       res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
       return;
     }
 
-    console.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet}`);
+    logger.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet}`);
     // TODO: invoke revoke_validator on Soroban contract
     res.status(202).json({ success: true, message: `Validator ${validatorWallet} revocation submitted` });
   } catch (err) {
@@ -354,5 +355,29 @@ export async function withdrawFeesController(req: Request, res: Response, next: 
     next(err);
   } finally {
     withdrawalInProgress = false;
+  }
+}
+
+const reindexSchema = z.object({
+  fromLedger: z.number().int().min(0),
+});
+
+/**
+ * POST /api/admin/indexer/reindex
+ * Resets the indexer's last_ledger to fromLedger so the next poll replays from that point.
+ */
+export async function reindex(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = reindexSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'fromLedger must be a non-negative integer' });
+      return;
+    }
+    const { fromLedger } = parsed.data;
+    const previous = getLastLedger();
+    setLastLedger(fromLedger);
+    res.json({ success: true, data: { fromLedger, previous } });
+  } catch (err) {
+    next(err);
   }
 }

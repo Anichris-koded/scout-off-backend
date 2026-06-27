@@ -17,6 +17,9 @@ class Statement {
       if (!this._db._events.find((e) => e.tx_hash === txHash)) {
         this._db._events.push({ type, ledger, tx_hash: txHash, payload });
       }
+    } else if (sql.startsWith('INSERT INTO MIGRATIONS')) {
+      const [id, appliedAt] = args;
+      this._db._migrations.set(id, { id, applied_at: appliedAt });
     } else if (sql.startsWith('INSERT INTO INDEXER_STATE') || sql.startsWith('INSERT OR REPLACE INTO INDEXER_STATE')) {
       const [key, value] = args;
       this._db._state.set(key, value);
@@ -130,6 +133,7 @@ class Database {
     this._events = [];
     this._state = new Map();
     this._players = [];
+    this._migrations = new Map();
   }
 
   exec(_sql) {

@@ -5,8 +5,19 @@ import { initDb } from './db';
 import { stellarHealth } from './services/stellar';
 import { checkHealth } from './services/ipfs';
 import { indexEvents } from './services/indexer';
+import { getLastLedger, setLastLedger } from './db';
 
 initDb();
+
+// If INDEXER_BACKFILL_FROM_LEDGER is set and is less than the stored last_ledger,
+// reset last_ledger so the next poll replays from that point.
+if (config.backfillFromLedger !== null) {
+  const stored = getLastLedger();
+  if (config.backfillFromLedger < stored) {
+    setLastLedger(config.backfillFromLedger);
+    logger.info(`Backfill: reset last_ledger from ${stored} to ${config.backfillFromLedger}`);
+  }
+}
 
 app.listen(config.port, () => {
   logger.info(`ScoutOff backend running on port ${config.port} [${config.network}]`);
