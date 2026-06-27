@@ -38,6 +38,22 @@ export function initDb(): void {
     CREATE INDEX IF NOT EXISTS idx_players_region   ON players (region);
     CREATE INDEX IF NOT EXISTS idx_players_position ON players (position);
     CREATE INDEX IF NOT EXISTS idx_players_tier     ON players (progress_level);
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      action       TEXT NOT NULL,
+      admin_wallet TEXT NOT NULL,
+      query_params TEXT NOT NULL DEFAULT '{}',
+      created_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_action     ON audit_log (action);
+    CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log (created_at);
+    CREATE TABLE IF NOT EXISTS pending_pins (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      payload    TEXT    NOT NULL,
+      attempts   INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT    NOT NULL,
+      last_tried TEXT
+    );
   `);
 }
 
@@ -179,4 +195,92 @@ export function queryPlayers(opts: QueryPlayersOptions = {}): PlayerRow[] {
   return getDb()
     .prepare(`SELECT * FROM players ${where} ORDER BY created_at ASC`)
     .all(...params) as PlayerRow[];
+}
+
+// ─── Audit log helpers ────────────────────────────────────────────────────────
+
+export interface AuditLogRow {
+  id: number;
+  action: string;
+  admin_wallet: string;
+  query_params: string;
+  created_at: string;
+}
+
+export interface AuditLogOptions {
+  action?: string;
+  startDate?: string;
+  endDate?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function insertAuditLog(entry: { action: string; adminWallet: string; queryParams: object; createdAt: string }): void {
+  getDb()
+    .prepare('INSERT INTO audit_log (action, admin_wallet, query_params, created_at) VALUES (?, ?, ?, ?)')
+    .run(entry.action, entry.adminWallet, JSON.stringify(entry.queryParams), entry.createdAt);
+}
+
+export function getAuditLogs(opts: AuditLogOptions = {}): AuditLogRow[] {
+  const { action, startDate, endDate, limit = 20, offset = 0 } = opts;
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (action) { conditions.push('action = ?'); params.push(action); }
+  if (startDate) { conditions.push('created_at >= ?'); params.push(startDate); }
+  if (endDate) { conditions.push('created_at <= ?'); params.push(endDate); }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(limit, offset);
+  return getDb()
+    .prepare(`SELECT * FROM audit_log ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+    .all(...params) as AuditLogRow[];
+}
+
+export function getAuditLogsCount(opts: Omit<AuditLogOptions, 'limit' | 'offset'> = {}): number {
+  const { action, startDate, endDate } = opts;
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (action) { conditions.push('action = ?'); params.push(action); }
+  if (startDate) { conditions.push('created_at >= ?'); params.push(startDate); }
+  if (endDate) { conditions.push('created_at <= ?'); params.push(endDate); }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS count FROM audit_log ${where}`)
+    .get(...params) as { count: number } | undefined;
+  return row?.count ?? 0;
+}
+
+// ─── Pending pins helpers ─────────────────────────────────────────────────────
+
+export interface PendingPinRow {
+  id: number;
+  payload: string;
+  attempts: number;
+  created_at: string;
+  last_tried: string | null;
+}
+
+export function insertPendingPin(payload: object): void {
+  getDb()
+    .prepare('INSERT INTO pending_pins (payload, attempts, created_at) VALUES (?, 0, ?)')
+    .run(JSON.stringify(payload), new Date().toISOString());
+}
+
+export function getPendingPins(limit = 10): PendingPinRow[] {
+  return getDb()
+    .prepare('SELECT * FROM pending_pins ORDER BY created_at ASC LIMIT ?')
+    .all(limit) as PendingPinRow[];
+}
+
+export function deletePendingPin(id: number): void {
+  getDb().prepare('DELETE FROM pending_pins WHERE id = ?').run(id);
+}
+
+export function incrementPendingPinAttempts(id: number): void {
+  getDb()
+    .prepare('UPDATE pending_pins SET attempts = attempts + 1, last_tried = ? WHERE id = ?')
+    .run(new Date().toISOString(), id);
 }

@@ -10,6 +10,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 import { securityHeaders } from './middleware/securityHeaders';
 import { correlationId } from './middleware/correlationId';
+import { traceId } from './middleware/traceId';
 import { responseTime } from './middleware/responseTime';
 import { stellarHealth } from './services/stellar';
 import { checkHealth } from './services/ipfs';
@@ -19,6 +20,7 @@ const app = express();
 
 app.use(cors());
 app.use(correlationId);
+app.use(traceId);
 app.use(securityHeaders);
 app.use(responseTime);
 // Configure Express body parser with JSON payload size limit

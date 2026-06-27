@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
-import { getEvents } from '../db';
+import { getEvents, getAuditLogs, getAuditLogsCount } from '../db';
 import { ApiResponse, EventRecord } from '../types';
 import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult } from '../services/stellar';
@@ -30,6 +30,37 @@ const isoDateString = z
   .string()
   .refine((v) => !isNaN(Date.parse(v)), { message: 'Must be a valid ISO 8601 date string' })
   .transform((v) => new Date(v));
+
+const auditQuerySchema = z.object({
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  action: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+/** GET /api/admin/audit */
+export async function getAuditLog(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = auditQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid query parameters' });
+      return;
+    }
+    const { startDate, endDate, action, limit, offset } = parsed.data;
+    const rows = getAuditLogs({ action, startDate, endDate, limit, offset });
+    const total = getAuditLogsCount({ action, startDate, endDate });
+    res.json({
+      success: true,
+      data: rows.map((r) => ({ ...r, query_params: JSON.parse(r.query_params) })),
+      total,
+      limit,
+      offset,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
 
 /** Exported so routes can apply validateQuery(adminDateRangeSchema) */
 export const adminDateRangeSchema = z.object({

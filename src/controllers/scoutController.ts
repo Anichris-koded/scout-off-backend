@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { getEvents } from '../db';
-import { submitContactPayment, isSubscribed, PaymentError } from '../services/stellar';
+import { submitContactPayment, isSubscribed, logTrialOffer, purchaseSubscription, PaymentError } from '../services/stellar';
+import { isValidEvidenceUri } from './validatorController';
 import { logger } from '../utils/logger';
 
 export const trialOfferSchema = z.object({
@@ -158,6 +159,36 @@ export async function submitTrialOffer(req: Request, res: Response, next: NextFu
     logger.info(`[scout] action=log_trial_offer_attempt scout=${wallet} playerId=${playerId}`);
 
     const result = await logTrialOffer(wallet, playerId, detailsUri);
+    res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    if (err instanceof PaymentError) {
+      res.status(402).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
+    next(err);
+  }
+}
+
+const subscribeSchema = z.object({
+  tier: z.enum(['basic', 'premium']),
+  duration: z.coerce.number().int().min(1).max(365),
+});
+
+/** POST /api/scouts/:wallet/subscribe */
+export async function subscribe(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { wallet } = req.params;
+    if (req.account !== wallet) {
+      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
+      return;
+    }
+    const parsed = subscribeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body' });
+      return;
+    }
+    const { tier, duration } = parsed.data;
+    const result = await purchaseSubscription(wallet, tier, duration);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     if (err instanceof PaymentError) {

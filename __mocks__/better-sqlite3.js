@@ -39,6 +39,37 @@ class Statement {
       const [level, player_id] = args;
       const idx = this._db._players.findIndex((p) => p.player_id === player_id);
       if (idx >= 0) this._db._players[idx].progress_level = level;
+    } else if (sql.startsWith('INSERT INTO AUDIT_LOG')) {
+      const [action, admin_wallet, query_params, created_at] = args;
+      this._db._auditLog.push({
+        id: this._db._auditLog.length + 1,
+        action,
+        admin_wallet,
+        query_params,
+        created_at,
+      });
+    } else if (sql.startsWith('INSERT INTO PENDING_PINS')) {
+      const [payload, , created_at] = args;
+      this._db._pendingPins.push({
+        id: this._db._pendingPins.length + 1,
+        payload,
+        attempts: 0,
+        created_at,
+        last_tried: null,
+      });
+    } else if (sql.startsWith('DELETE FROM PENDING_PINS')) {
+      const id = args[0];
+      this._db._pendingPins = this._db._pendingPins.filter((r) => r.id !== id);
+    } else if (sql.startsWith('UPDATE PENDING_PINS')) {
+      const [last_tried, id] = args;
+      const idx = this._db._pendingPins.findIndex((r) => r.id === id);
+      if (idx >= 0) {
+        this._db._pendingPins[idx].attempts += 1;
+        this._db._pendingPins[idx].last_tried = last_tried;
+      }
+    } else if (sql.startsWith('INSERT INTO MIGRATIONS')) {
+      const [id, applied_at] = args;
+      this._db._migrations.set(id, { id, applied_at });
     }
     return { changes: 1, lastInsertRowid: 0 };
   }
@@ -61,6 +92,21 @@ class Statement {
       const rows = sql.includes('WHERE TYPE = ?')
         ? this._db._events.filter((e) => e.type === args[0])
         : this._db._events;
+      return { count: rows.length };
+    }
+    if (sql.includes('COUNT(*)') && sql.includes('FROM AUDIT_LOG')) {
+      let rows = [...this._db._auditLog];
+      let argIdx = 0;
+      const whereMatch = sql.match(/WHERE (.+?)(?:ORDER|$)/);
+      if (whereMatch) {
+        const conditions = whereMatch[1].split(' AND ');
+        for (const cond of conditions) {
+          const val = args[argIdx++];
+          if (cond.includes('ACTION = ?')) rows = rows.filter((r) => r.action === val);
+          else if (cond.includes('CREATED_AT >= ?')) rows = rows.filter((r) => r.created_at >= val);
+          else if (cond.includes('CREATED_AT <= ?')) rows = rows.filter((r) => r.created_at <= val);
+        }
+      }
       return { count: rows.length };
     }
     return undefined;
@@ -102,6 +148,34 @@ class Statement {
       }
       return rows;
     }
+    if (sql.includes('FROM AUDIT_LOG')) {
+      let rows = [...this._db._auditLog];
+      let argIdx = 0;
+      const whereMatch = sql.match(/WHERE (.+?)(?:ORDER|LIMIT|$)/);
+      if (whereMatch) {
+        const conditions = whereMatch[1].trim().split(' AND ');
+        for (const cond of conditions) {
+          const val = args[argIdx++];
+          if (cond.includes('ACTION = ?')) rows = rows.filter((r) => r.action === val);
+          else if (cond.includes('CREATED_AT >= ?')) rows = rows.filter((r) => r.created_at >= val);
+          else if (cond.includes('CREATED_AT <= ?')) rows = rows.filter((r) => r.created_at <= val);
+        }
+      }
+      if (sql.includes('LIMIT ?')) {
+        const limit = args[argIdx++];
+        const offset = args[argIdx++] ?? 0;
+        rows = rows.slice(offset, offset + limit);
+      }
+      return rows;
+    }
+    if (sql.includes('FROM PENDING_PINS')) {
+      let rows = [...this._db._pendingPins];
+      if (sql.includes('LIMIT ?')) {
+        const limit = args[0];
+        rows = rows.slice(0, limit);
+      }
+      return rows;
+    }
     return [];
   }
 }
@@ -111,6 +185,9 @@ class Database {
     this._events = [];
     this._state = new Map();
     this._players = [];
+    this._auditLog = [];
+    this._pendingPins = [];
+    this._migrations = new Map();
   }
 
   exec(_sql) {

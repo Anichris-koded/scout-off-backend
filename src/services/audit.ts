@@ -1,4 +1,5 @@
 import { logger } from '../utils/logger';
+import { insertAuditLog } from '../db';
 
 export interface AuditEvent {
   action: string;
@@ -11,10 +12,19 @@ export interface AuditEvent {
 
 /**
  * Log an audit event for compliance tracking.
- * TODO: export to external ledger / append-only store.
+ * Persists to the audit_log SQLite table and emits an info log line.
  */
 export function logAuditEvent(event: AuditEvent): void {
   logger.info('[audit]', JSON.stringify(event));
-  // Placeholder: forward to external compliance ledger
-  // externalLedger.append(event);
+  try {
+    insertAuditLog({
+      action: event.contractAction ?? event.action,
+      adminWallet: event.adminWallet,
+      queryParams: { ...event.queryParams, ...(event.contractAction ? { parentAction: event.action } : {}) },
+      createdAt: event.timestamp,
+    });
+  } catch {
+    // DB write failure must not break the request
+    logger.warn('[audit] failed to persist audit event to DB');
+  }
 }

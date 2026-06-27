@@ -1,8 +1,7 @@
 import { Router } from 'express';
-import { getSubscription, getUnlockedContacts, unlockContact, getPaymentHistory, subscribe } from '../controllers/scoutController';
+import { getSubscription, getUnlockedContacts, unlockContact, getPaymentHistory, subscribe, submitTrialOffer, trialOfferSchema } from '../controllers/scoutController';
 import { requireAuth, requireRole } from '../middleware/auth';
-import { getSubscription, getUnlockedContacts, unlockContact, getPaymentHistory } from '../controllers/scoutController';
-import { requireRole } from '../middleware/auth';
+import { validateBody } from '../middleware/validate';
 
 const router = Router();
 

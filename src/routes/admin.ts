@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, getAuditLog } from '../controllers/adminController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
 
@@ -50,6 +50,17 @@ router.get('/events/export', requireRole('admin'), exportEvents);
  * @auth Bearer (admin role required)
  */
 router.get('/fees', requireRole('admin'), getFeeSummary);
+
+/**
+ * GET /api/admin/audit
+ *
+ * Returns paginated audit log entries. Supports `startDate`, `endDate` (ISO 8601),
+ * `action` filters, and `limit`/`offset` pagination.
+ *
+ * @response 200 { success: true, data: AuditLogRow[], total, limit, offset }
+ * @auth Bearer (admin role required)
+ */
+router.get('/audit', requireRole('admin'), getAuditLog);
 
 /**
  * POST /api/admin/fees
