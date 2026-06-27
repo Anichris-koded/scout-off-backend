@@ -38,3 +38,41 @@ export function rateLimit(options: RateLimitOptions = {}) {
     next();
   };
 }
+
+/**
+ * Simple in-process wallet-based rate limiter.
+ * Configurable via windowMs and max; excess requests return HTTP 429.
+ * If req.account is not present, it calls next().
+ */
+export function walletRateLimit(options: RateLimitOptions = {}) {
+  const windowMs = options.windowMs ?? config.rateLimit.windowMs;
+  const max = options.max ?? config.rateLimit.max;
+  const hits = new Map<string, { count: number; resetAt: number }>();
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!config.rateLimit.enabled) {
+      next();
+      return;
+    }
+    const wallet = req.account;
+    if (!wallet) {
+      next();
+      return;
+    }
+    const now = Date.now();
+    const entry = hits.get(wallet);
+
+    if (!entry || now >= entry.resetAt) {
+      hits.set(wallet, { count: 1, resetAt: now + windowMs });
+      next();
+      return;
+    }
+
+    entry.count += 1;
+    if (entry.count > max) {
+      res.status(429).json({ success: false, error: 'Too many requests, please try again later' });
+      return;
+    }
+    next();
+  };
+}

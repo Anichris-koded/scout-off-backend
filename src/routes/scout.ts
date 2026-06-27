@@ -1,7 +1,9 @@
 import { Router } from 'express';
-import { getSubscription, getUnlockedContacts, unlockContact, getPaymentHistory, subscribe, submitTrialOffer, trialOfferSchema } from '../controllers/scoutController';
+import { getSubscription, getUnlockedContacts, getContactDetails, unlockContact, getPaymentHistory, subscribe, submitTrialOffer, trialOfferSchema } from '../controllers/scoutController';
+import { getScoutRecommendations } from '../controllers/scoutRecommendationsController';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
+import { walletRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
 
@@ -31,7 +33,7 @@ router.get("/:wallet/subscription", requireRole("scout"), getSubscription);
  * @response 403 { success: false, error: string } - Scout role required
  * @auth Bearer (scout role required)
  */
-router.post("/:wallet/subscribe", requireRole("scout"), subscribe);
+router.post("/:wallet/subscribe", requireRole("scout"), walletRateLimit(), subscribe);
 
 /**
  * GET /api/scouts/:wallet/contacts
@@ -44,6 +46,7 @@ router.post("/:wallet/subscribe", requireRole("scout"), subscribe);
  * @auth Bearer (any authenticated user)
  */
 router.get("/:wallet/contacts", requireRole("scout"), getUnlockedContacts);
+router.get("/:wallet/contacts/:playerId", requireRole("scout"), getContactDetails);
 
 /**
  * POST /api/scouts/:wallet/contacts/:playerId/unlock
@@ -60,6 +63,7 @@ router.get("/:wallet/contacts", requireRole("scout"), getUnlockedContacts);
 router.post(
   "/:wallet/contacts/:playerId/unlock",
   requireRole("scout"),
+  walletRateLimit(),
   unlockContact,
 );
 router.get("/:wallet/payments", requireRole("scout"), getPaymentHistory);
