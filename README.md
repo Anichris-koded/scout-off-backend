@@ -340,6 +340,99 @@ On startup the server will:
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions.
 
+## Docker
+
+The fastest way to run the backend locally. No Node.js installation required — Docker handles everything.
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes both `docker` and `docker compose`)
+
+### Start the service
+
+```bash
+docker compose up
+```
+
+This will:
+
+1. Build a multi-stage image (TypeScript compilation in the builder stage, lean Alpine runtime)
+2. Start the backend on **port 4000**
+3. Create a named volume (`scout_db`) so the SQLite database survives restarts
+
+The API is ready when you see:
+
+```
+scout-off-backend  | {"level":"info","msg":"ScoutOff backend running on port 4000 [testnet]"}
+```
+
+Verify it's up:
+
+```bash
+curl http://localhost:4000/health/liveness
+# → {"status":"ok"}
+```
+
+### Required variables before going further
+
+The `docker-compose.yml` ships with sensible defaults so the service starts without changes. Both required variables have placeholder values that satisfy the startup check. Update them in `docker-compose.yml` (or override with a local `.env` file) when you're ready to connect to a real contract:
+
+| Variable | Default in compose | Description |
+|----------|--------------------|-------------|
+| `CONTRACT_ID` | `PLACEHOLDER_REPLACE_WITH_REAL_CONTRACT_ID` | Your deployed ScoutOff Soroban contract address |
+| `JWT_SECRET` | `change-me-to-a-long-random-secret-at-least-32-chars` | Secret for signing JWTs — generate with `openssl rand -hex 32` |
+
+### Run in the background (detached)
+
+```bash
+docker compose up -d
+```
+
+View logs at any time:
+
+```bash
+docker compose logs -f
+```
+
+### Stop the service
+
+```bash
+docker compose down
+```
+
+SQLite data is preserved in the `scout_db` volume. To also delete the volume and start fresh:
+
+```bash
+docker compose down -v
+```
+
+### Build the image standalone
+
+```bash
+docker build -t scout-off-backend .
+```
+
+Run it with environment variables:
+
+```bash
+docker run --rm \
+  -p 4000:4000 \
+  -v scout_db:/data \
+  -e CONTRACT_ID=your_contract_id \
+  -e JWT_SECRET=your_secret \
+  scout-off-backend
+```
+
+### Customise the port
+
+Set `PORT` in `docker-compose.yml` or prefix the command:
+
+```bash
+PORT=5000 docker compose up
+```
+
+The host port mapping follows the `PORT` variable; the container always listens on 4000 internally.
+
 ## Backend Local Development
 
 This section covers everything you need to get the backend running locally.
