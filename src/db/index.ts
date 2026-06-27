@@ -2,6 +2,22 @@ import Database from 'better-sqlite3';
 import config from '../config';
 import { EventRecord, ContractEventType } from '../types';
 import { runMigrations } from './migrate';
+import { logger } from '../utils/logger';
+
+function slowQueryThresholdMs(): number {
+  return parseInt(process.env.SLOW_QUERY_THRESHOLD_MS ?? '50', 10);
+}
+
+/** Runs fn(), logs a warn if it takes longer than SLOW_QUERY_THRESHOLD_MS. */
+export function timedQuery<T>(sql: string, fn: () => T): T {
+  const start = Date.now();
+  const result = fn();
+  const duration = Date.now() - start;
+  if (duration >= slowQueryThresholdMs()) {
+    logger.warn(`[db] slow query ${duration}ms: ${sql}`);
+  }
+  return result;
+}
 
 // ─── Connection & schema ──────────────────────────────────────────────────────
 
@@ -49,16 +65,16 @@ export function getDb(): Database.Database {
 // ─── State helpers ────────────────────────────────────────────────────────────
 
 export function getLastLedger(): number {
-  const row = getDb()
-    .prepare('SELECT value FROM indexer_state WHERE key = ?')
-    .get('last_ledger') as { value: string } | undefined;
+  const sql = 'SELECT value FROM indexer_state WHERE key = ?';
+  const row = timedQuery(sql, () =>
+    getDb().prepare(sql).get('last_ledger') as { value: string } | undefined
+  );
   return row ? parseInt(row.value, 10) : 0;
 }
 
 export function setLastLedger(ledger: number): void {
-  getDb().prepare(
-    'INSERT INTO indexer_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-  ).run('last_ledger', String(ledger));
+  const sql = 'INSERT INTO indexer_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
+  timedQuery(sql, () => getDb().prepare(sql).run('last_ledger', String(ledger)));
 }
 
 // ─── Query helpers ────────────────────────────────────────────────────────────
@@ -78,15 +94,20 @@ export function getEvents(type?: ContractEventType, opts?: GetEventsOptions): Ev
   const { limit, offset } = opts ?? {};
   const hasPagination = limit !== undefined && offset !== undefined;
 
+  let sql: string;
   let rows: EventRow[];
   if (type && hasPagination) {
-    rows = db.prepare('SELECT * FROM events WHERE type = ? ORDER BY ledger ASC LIMIT ? OFFSET ?').all(type, limit, offset) as EventRow[];
+    sql = 'SELECT * FROM events WHERE type = ? ORDER BY ledger ASC LIMIT ? OFFSET ?';
+    rows = timedQuery(sql, () => db.prepare(sql).all(type, limit, offset) as EventRow[]);
   } else if (type) {
-    rows = db.prepare('SELECT * FROM events WHERE type = ? ORDER BY ledger ASC').all(type) as EventRow[];
+    sql = 'SELECT * FROM events WHERE type = ? ORDER BY ledger ASC';
+    rows = timedQuery(sql, () => db.prepare(sql).all(type) as EventRow[]);
   } else if (hasPagination) {
-    rows = db.prepare('SELECT * FROM events ORDER BY ledger ASC LIMIT ? OFFSET ?').all(limit, offset) as EventRow[];
+    sql = 'SELECT * FROM events ORDER BY ledger ASC LIMIT ? OFFSET ?';
+    rows = timedQuery(sql, () => db.prepare(sql).all(limit, offset) as EventRow[]);
   } else {
-    rows = db.prepare('SELECT * FROM events ORDER BY ledger ASC').all() as EventRow[];
+    sql = 'SELECT * FROM events ORDER BY ledger ASC';
+    rows = timedQuery(sql, () => db.prepare(sql).all() as EventRow[]);
   }
 
   return rows.map((r) => ({
@@ -99,9 +120,12 @@ export function getEvents(type?: ContractEventType, opts?: GetEventsOptions): Ev
 
 export function getEventsCount(type?: ContractEventType): number {
   const db = getDb();
+  const sql = type
+    ? 'SELECT COUNT(*) AS count FROM events WHERE type = ?'
+    : 'SELECT COUNT(*) AS count FROM events';
   const row = type
-    ? db.prepare('SELECT COUNT(*) AS count FROM events WHERE type = ?').get(type) as { count: number } | undefined
-    : db.prepare('SELECT COUNT(*) AS count FROM events').get() as { count: number } | undefined;
+    ? timedQuery(sql, () => db.prepare(sql).get(type) as { count: number } | undefined)
+    : timedQuery(sql, () => db.prepare(sql).get() as { count: number } | undefined);
   return row?.count ?? 0;
 }
 
@@ -131,31 +155,28 @@ export function upsertPlayer(p: {
   metadata_uri?: string;
   created_at?: number;
 }): void {
-  getDb()
-    .prepare(
-      `INSERT INTO players (player_id, wallet, position, region, metadata_uri, created_at)
+  const sql = `INSERT INTO players (player_id, wallet, position, region, metadata_uri, created_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(player_id) DO UPDATE SET
          wallet       = excluded.wallet,
          position     = excluded.position,
          region       = excluded.region,
-         metadata_uri = excluded.metadata_uri`
-    )
-    .run(p.player_id, p.wallet, p.position ?? null, p.region ?? null, p.metadata_uri ?? null, p.created_at ?? null);
+         metadata_uri = excluded.metadata_uri`;
+  timedQuery(sql, () =>
+    getDb().prepare(sql).run(p.player_id, p.wallet, p.position ?? null, p.region ?? null, p.metadata_uri ?? null, p.created_at ?? null)
+  );
 }
 
 export function updatePlayerProgress(playerId: string, level: number): void {
-  getDb()
-    .prepare('UPDATE players SET progress_level = ? WHERE player_id = ?')
-    .run(level, playerId);
+  const sql = 'UPDATE players SET progress_level = ? WHERE player_id = ?';
+  timedQuery(sql, () => getDb().prepare(sql).run(level, playerId));
 }
 
 export function getPlayerById(playerId: string): PlayerRow | null {
-  return (
-    getDb()
-      .prepare('SELECT * FROM players WHERE player_id = ?')
-      .get(playerId) as PlayerRow | undefined
-  ) ?? null;
+  const sql = 'SELECT * FROM players WHERE player_id = ?';
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(playerId) as PlayerRow | undefined) ?? null
+  );
 }
 
 export function queryPlayers(opts: QueryPlayersOptions = {}): PlayerRow[] {
@@ -176,7 +197,6 @@ export function queryPlayers(opts: QueryPlayersOptions = {}): PlayerRow[] {
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  return getDb()
-    .prepare(`SELECT * FROM players ${where} ORDER BY created_at ASC`)
-    .all(...params) as PlayerRow[];
+  const sql = `SELECT * FROM players ${where} ORDER BY created_at ASC`;
+  return timedQuery(sql, () => getDb().prepare(sql).all(...params) as PlayerRow[]);
 }
