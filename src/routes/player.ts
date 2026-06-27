@@ -10,7 +10,7 @@ import {
   updatePlayerSchema,
 } from '../controllers/playerController';
 import { validateBody, validateQuery } from '../middleware/validate';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, optionalAuth } from '../middleware/auth';
 import { requireOwner } from '../middleware/requireOwner';
 
 const router = Router();
@@ -27,7 +27,7 @@ const router = Router();
  * @response 200 { success: true, data: Player[] }
  * @auth none
  */
-router.get('/', validateQuery(filterSchema), filterPlayers);
+router.get('/', optionalAuth, validateQuery(filterSchema), filterPlayers);
 router.post(
   '/register',
   validateBody(registerSchema, { context: 'player_registration' }),

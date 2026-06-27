@@ -4,7 +4,8 @@ export type AuditEventType =
   | 'player_registered'
   | 'profile_updated'
   | 'milestone_submitted'
-  | 'milestone_approved';
+  | 'milestone_approved'
+  | 'player_search';
 
 export interface AuditEntry {
   actorWallet: string;

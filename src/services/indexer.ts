@@ -1,6 +1,8 @@
 import { server } from './stellar';
 import config from '../config';
 import { getDb, getLastLedger, setLastLedger } from '../db';
+import { dispatchEventWebhook } from './webhooks';
+import { logger } from '../utils/logger';
 
 // ─── Deduplication strategy ───────────────────────────────────────────────────
 //
@@ -50,21 +52,29 @@ export async function indexEvents(): Promise<void> {
 
   if (!response.events.length) return;
 
+  const approvedMilestones: Array<{ type: string; payload: unknown }> = [];
+
   const insertMany = db.transaction((events: typeof response.events) => {
     for (const raw of events) {
+      const eventType = raw.topic[0]?.value() as string;
+      const eventPayload = raw.value?.value() ?? {};
       const eventId = normalizeEventId(config.contractId, raw.ledger, raw.txHash);
       onBeforeInsert(eventId);
-      insert.run(
-        raw.topic[0]?.value() as string,
-        raw.ledger,
-        raw.txHash,
-        JSON.stringify(raw.value?.value() ?? {})
-      );
+      insert.run(eventType, raw.ledger, raw.txHash, JSON.stringify(eventPayload));
       onAfterInsert(eventId);
+      if (eventType === 'milestone_approved') {
+        approvedMilestones.push({ type: eventType, payload: eventPayload });
+      }
     }
   });
 
   insertMany(response.events);
+
+  for (const { type, payload } of approvedMilestones) {
+    dispatchEventWebhook(type, payload).catch((err: unknown) => {
+      logger.warn(`[indexer] webhook dispatch failed for ${type}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
 
   const latest = response.events.at(-1)!;
   setLastLedger(latest.ledger + 1);

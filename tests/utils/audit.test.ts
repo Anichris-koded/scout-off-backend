@@ -23,6 +23,20 @@ describe('recordAudit', () => {
     expect(auditStore).toHaveLength(1);
   });
 
+  it('stores a player_search entry linked to a scout wallet', () => {
+    const entry = recordAudit('GSCOUT123', 'player_search', { region: 'europe', position: 'striker', resultCount: 5 });
+    expect(entry.eventType).toBe('player_search');
+    expect(entry.actorWallet).toBe('GSCOUT123');
+    expect(typeof entry.payloadHash).toBe('string');
+    expect(auditStore).toHaveLength(1);
+  });
+
+  it('stores a player_search entry with anonymous wallet when unauthenticated', () => {
+    const entry = recordAudit('anonymous', 'player_search', { region: null, position: null, resultCount: 10 });
+    expect(entry.actorWallet).toBe('anonymous');
+    expect(entry.eventType).toBe('player_search');
+  });
+
   it('produces deterministic hash for the same payload', () => {
     const payload = { playerId: 'P1', milestoneType: 'performance' };
     const a = recordAudit('G1', 'milestone_submitted', payload);

@@ -13,6 +13,7 @@ import { validateMinTier } from '../utils/minTierValidator';
 import { normalizePosition } from '../utils/positionAliases';
 import { dispatchEventWebhook } from '../services/webhooks';
 import { enrichPlayerResult } from '../utils/searchEnrichment';
+import { recordAudit } from '../utils/audit';
 
 const baseRegistrationSchema = z.object({
   wallet: z.string().min(56).max(56),
@@ -126,6 +127,17 @@ export async function filterPlayers(req: Request, res: Response, next: NextFunct
       ...p,
       ...enrichPlayerResult(Number(p.progress_level ?? 0)),
     }));
+
+    const scoutWallet = (req as any).account ?? 'anonymous';
+    recordAudit(scoutWallet, 'player_search', {
+      region: sanitizedRegion ?? null,
+      position: normalizedPosition ?? sanitizedPosition ?? null,
+      minTier: minTier ?? null,
+      page,
+      pageSize,
+      resultCount: total,
+    });
+
     res.json({ success: true, data: enriched, total, page, pageSize, pages });
   } catch (err) {
     next(err);
