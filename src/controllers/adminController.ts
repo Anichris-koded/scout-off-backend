@@ -6,6 +6,7 @@ import { ApiResponse, EventRecord } from '../types';
 import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult } from '../services/stellar';
 import config from '../config';
+import { logger } from '../utils/logger';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
@@ -106,12 +107,12 @@ export async function registerValidator(req: Request, res: Response, next: NextF
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
-      console.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
+      logger.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
       res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
       return;
     }
 
-    console.info(`[admin] action=register_validator admin=${adminWallet} target=${validatorWallet}`);
+    logger.info(`[admin] action=register_validator admin=${adminWallet} target=${validatorWallet}`);
     // TODO: invoke register_validator on Soroban contract
     res.status(202).json({ success: true, message: `Validator ${validatorWallet} registration submitted` });
   } catch (err) {
@@ -126,12 +127,12 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
-      console.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
+      logger.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
       res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
       return;
     }
 
-    console.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet}`);
+    logger.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet}`);
     // TODO: invoke revoke_validator on Soroban contract
     res.status(202).json({ success: true, message: `Validator ${validatorWallet} revocation submitted` });
   } catch (err) {

@@ -14,6 +14,13 @@ module.exports = {
     es2021: true
   },
   rules: {
-    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }]
-  }
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    'no-console': 'error'
+  },
+  overrides: [
+    {
+      files: ['src/utils/logger.ts'],
+      rules: { 'no-console': 'off' }
+    }
+  ]
 };
