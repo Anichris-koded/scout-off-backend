@@ -5,6 +5,7 @@ import { buildChallenge, verifyAndIssueToken, extractAccount } from '../services
 import { logger } from '../utils/logger';
 import { extractClientIp } from '../utils/ipExtractor';
 import config from '../config';
+import { ErrorCode } from '../utils/errorCodes';
 
 const TOKEN_TTL_SECONDS = 86400;
 
@@ -31,7 +32,7 @@ export function getChallenge(req: Request, res: Response, next: NextFunction): v
         attemptedAccount: (req.query.account as string) ?? null,
         reason: parsed.error.errors[0]?.message,
       });
-      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request' });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const challenge = buildChallenge(parsed.data.account);
@@ -51,7 +52,7 @@ export function postToken(req: Request, res: Response, next: NextFunction): void
         origin: extractClientIp(req),
         reason: parsed.error.errors[0]?.message,
       });
-      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request' });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const { transaction, role } = parsed.data;
@@ -76,7 +77,7 @@ export function postToken(req: Request, res: Response, next: NextFunction): void
         attemptedWallet,
         reason: err.message,
       });
-      res.status(401).json({ success: false, error: err.message });
+      res.status(401).json({ success: false, error: err.message, code: ErrorCode.UNAUTHORIZED });
       return;
     }
     next(err);

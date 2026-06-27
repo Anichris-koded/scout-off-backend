@@ -6,6 +6,7 @@ import { getEvents } from '../db';
 import { invalidateMilestoneCache } from '../services/cache';
 import { recordAudit } from '../utils/audit';
 import { PlayerMilestone } from '../types';
+import { ErrorCode } from '../utils/errorCodes';
 
 /**
  * Validates that an evidence URI is secure and properly formatted.

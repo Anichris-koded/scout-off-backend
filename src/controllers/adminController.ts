@@ -7,6 +7,7 @@ import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult } from '../services/stellar';
 import config from '../config';
 import { logger } from '../utils/logger';
+import { ErrorCode } from '../utils/errorCodes';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
@@ -54,12 +55,12 @@ export async function getAllEvents(req: Request, res: Response, next: NextFuncti
   try {
     const dateResult = adminDateRangeSchema.safeParse(req.query);
     if (!dateResult.success) {
-      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters' });
+      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const pageResult = paginationSchema.safeParse(req.query);
     if (!pageResult.success) {
-      res.status(400).json({ success: false, error: pageResult.error.errors[0]?.message ?? 'Invalid pagination parameters' });
+      res.status(400).json({ success: false, error: pageResult.error.errors[0]?.message ?? 'Invalid pagination parameters', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const { startDate, endDate, eventType } = dateResult.data;
@@ -86,7 +87,7 @@ export async function getFeeSummary(req: Request, res: Response, next: NextFunct
   try {
     const dateResult = adminDateRangeSchema.safeParse(req.query);
     if (!dateResult.success) {
-      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters' });
+      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const adminWallet = req.account ?? 'unknown';
@@ -112,7 +113,7 @@ export async function registerValidator(req: Request, res: Response, next: NextF
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
       logger.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
-      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
+      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
 
@@ -132,7 +133,7 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
       logger.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
-      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
+      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
 
@@ -203,7 +204,7 @@ export async function introspectToken(req: Request, res: Response, next: NextFun
   try {
     const parsed = introspectSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.errors[0].message });
+      res.status(400).json({ success: false, error: parsed.error.errors[0].message, code: ErrorCode.VALIDATION_ERROR });
       return;
     }
 
@@ -211,7 +212,7 @@ export async function introspectToken(req: Request, res: Response, next: NextFun
     try {
       payload = jwt.verify(parsed.data.token, config.jwtSecret) as jwt.JwtPayload;
     } catch {
-      res.status(400).json({ success: false, error: 'Invalid or expired token' });
+      res.status(400).json({ success: false, error: 'Invalid or expired token', code: ErrorCode.TOKEN_INVALID });
       return;
     }
 
@@ -258,7 +259,7 @@ export function setWithdrawalLockForTesting(): void {
 export async function withdrawFeesController(req: Request, res: Response, next: NextFunction) {
   // Controller-level role guard (defence-in-depth in addition to the route middleware).
   if (req.role !== 'admin') {
-    res.status(403).json({ success: false, error: 'Insufficient permissions' });
+    res.status(403).json({ success: false, error: 'Insufficient permissions', code: ErrorCode.FORBIDDEN });
     return;
   }
 
@@ -272,7 +273,7 @@ export async function withdrawFeesController(req: Request, res: Response, next: 
       queryParams: { error: 'validation_failed', reason: parsed.error.errors[0]?.message },
       timestamp: new Date().toISOString(),
     });
-    res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body' });
+    res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body', code: ErrorCode.VALIDATION_ERROR });
     return;
   }
 
@@ -287,7 +288,7 @@ export async function withdrawFeesController(req: Request, res: Response, next: 
       timestamp: new Date().toISOString(),
       contractAction: 'withdraw_fees',
     });
-    res.status(409).json({ success: false, error: 'A withdrawal is already in progress' });
+    res.status(409).json({ success: false, error: 'A withdrawal is already in progress', code: ErrorCode.CONFLICT });
     return;
   }
 
@@ -339,16 +340,16 @@ export async function withdrawFeesController(req: Request, res: Response, next: 
     if (err instanceof FeeWithdrawalError) {
       switch (err.code) {
         case 'NO_FEES':
-          res.status(409).json({ success: false, error: 'No fees available to withdraw' });
+          res.status(409).json({ success: false, error: 'No fees available to withdraw', code: ErrorCode.NO_FEES });
           return;
         case 'CONTRACT_PAUSED':
-          res.status(409).json({ success: false, error: 'Contract is paused; withdrawal not available' });
+          res.status(409).json({ success: false, error: 'Contract is paused; withdrawal not available', code: ErrorCode.CONTRACT_PAUSED });
           return;
         case 'INVALID_RECIPIENT':
-          res.status(400).json({ success: false, error: 'Invalid recipient address' });
+          res.status(400).json({ success: false, error: 'Invalid recipient address', code: ErrorCode.INVALID_RECIPIENT });
           return;
         case 'NETWORK_ERROR':
-          res.status(503).json({ success: false, error: 'Network error; please retry' });
+          res.status(503).json({ success: false, error: 'Network error; please retry', code: ErrorCode.NETWORK_ERROR });
           return;
       }
     }
@@ -370,7 +371,7 @@ export async function reindex(req: Request, res: Response, next: NextFunction) {
   try {
     const parsed = reindexSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'fromLedger must be a non-negative integer' });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'fromLedger must be a non-negative integer', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const { fromLedger } = parsed.data;

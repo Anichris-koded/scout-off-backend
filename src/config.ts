@@ -73,6 +73,26 @@ const config = {
   backfillFromLedger: process.env.INDEXER_BACKFILL_FROM_LEDGER
     ? parseInt(process.env.INDEXER_BACKFILL_FROM_LEDGER, 10)
     : null,
+  requestLog: {
+    /**
+     * Paths that are never logged by requestLogger (exact match).
+     * Populated from LOG_SKIP_PATHS (comma-separated) or the built-in
+     * defaults that cover all Kubernetes probe and metrics endpoints.
+     */
+    skipPaths: process.env.LOG_SKIP_PATHS
+      ? process.env.LOG_SKIP_PATHS.split(',').map((p) => p.trim()).filter(Boolean)
+      : ['/health', '/health/liveness', '/health/readiness', '/ready', '/metrics'],
+    /**
+     * Sample rate (0–1) applied to every path not in skipPaths.
+     * 1 = log every request (default); 0.1 = log ~10% of requests.
+     * Useful for very high-frequency application paths in production.
+     * Controlled by LOG_SAMPLE_RATE env var.
+     */
+    sampleRate: (() => {
+      const raw = parseFloat(process.env.LOG_SAMPLE_RATE ?? '1');
+      return Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 1;
+    })(),
+  },
 };
 
 export default config;

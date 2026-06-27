@@ -55,6 +55,8 @@ export function initDb(): void {
     CREATE INDEX IF NOT EXISTS idx_players_position ON players (position);
     CREATE INDEX IF NOT EXISTS idx_players_tier     ON players (progress_level);
   `);
+  // Run SQL migrations (player_profile_history, idempotency_keys, etc.)
+  runMigrations(_db);
 }
 
 export function getDb(): Database.Database {
@@ -237,4 +239,64 @@ function buildPlayerWhereClause(opts: QueryPlayersOptions): { where: string; par
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const sql = `SELECT * FROM players ${where} ORDER BY created_at ASC`;
   return timedQuery(sql, () => getDb().prepare(sql).all(...params) as PlayerRow[]);
+}
+
+// ─── Idempotency key helpers ──────────────────────────────────────────────────
+
+export interface IdempotencyRecord {
+  key: string;
+  status_code: number;
+  response: string; // raw JSON string
+  created_at: number;
+  expires_at: number;
+}
+
+const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Look up a non-expired idempotency key.
+ * Returns the stored record, or null when the key is absent or expired.
+ */
+export function getIdempotencyRecord(key: string): IdempotencyRecord | null {
+  const sql = 'SELECT * FROM idempotency_keys WHERE key = ? AND expires_at > ?';
+  const now = Date.now();
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(key, now) as IdempotencyRecord | undefined) ?? null
+  );
+}
+
+/**
+ * Persist a new idempotency key with its response payload.
+ * Silently ignores conflicts — two concurrent requests with the same key
+ * will both compute a response but only the first one to commit wins; the
+ * second one will then be served the stored value by getIdempotencyRecord.
+ */
+export function saveIdempotencyRecord(
+  key: string,
+  statusCode: number,
+  body: unknown,
+): void {
+  const now = Date.now();
+  const sql = `
+    INSERT INTO idempotency_keys (key, status_code, response, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(key) DO NOTHING
+  `;
+  timedQuery(sql, () =>
+    getDb()
+      .prepare(sql)
+      .run(key, statusCode, JSON.stringify(body), now, now + IDEMPOTENCY_TTL_MS)
+  );
+}
+
+/**
+ * Delete all idempotency records whose TTL has passed.
+ * Call this periodically (e.g., from the indexer poll loop) to keep the table small.
+ */
+export function purgeExpiredIdempotencyKeys(): number {
+  const sql = 'DELETE FROM idempotency_keys WHERE expires_at <= ?';
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(Date.now());
+    return info.changes;
+  });
 }

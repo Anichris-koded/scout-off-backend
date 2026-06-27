@@ -4,15 +4,7 @@ import { getEvents } from '../db';
 import { submitContactPayment, isSubscribed, purchaseSubscription, PaymentError } from '../services/stellar';
 import { logger } from '../utils/logger';
 import { isValidEvidenceUri } from './validatorController';
-
-function isValidEvidenceUri(uri: string): boolean {
-  return uri.startsWith('ipfs://') || uri.startsWith('https://');
-}
-
-async function logTrialOffer(scoutWallet: string, playerId: string, detailsUri: string) {
-  // TODO: invoke log_trial_offer on the Soroban contract
-  return { transactionId: `stub-trial-${Date.now()}`, playerId, detailsUri, playerTier: 3 };
-}
+import { ErrorCode } from '../utils/errorCodes';
 
 export const trialOfferSchema = z.object({
   playerId: z.string().min(1),
@@ -44,7 +36,7 @@ export async function getSubscription(req: Request, res: Response, next: NextFun
   try {
     const { wallet } = req.params;
     if (req.account !== wallet) {
-      res.status(401).json({ success: false, error: 'Unauthorized' });
+      res.status(401).json({ success: false, error: 'Unauthorized', code: ErrorCode.UNAUTHORIZED });
       return;
     }
 
@@ -86,7 +78,7 @@ export async function getUnlockedContacts(req: Request, res: Response, next: Nex
     const { playerId } = req.query as { playerId?: string };
 
     if (req.account !== wallet) {
-      res.status(401).json({ success: false, error: 'Unauthorized' });
+      res.status(401).json({ success: false, error: 'Unauthorized', code: ErrorCode.UNAUTHORIZED });
       return;
     }
 
@@ -114,14 +106,13 @@ export async function unlockContact(req: Request, res: Response, next: NextFunct
   try {
     const { wallet, playerId } = req.params;
     if (!wallet || !playerId) {
-      res.status(400).json({ success: false, error: 'wallet and playerId are required' });
+      res.status(400).json({ success: false, error: 'wallet and playerId are required', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
 
-    // Verify the JWT subject matches the wallet in the path
     if (req.account !== wallet) {
       logger.warn(`[scout] action=unlock_contact_denied scout=${wallet} playerId=${playerId} reason=wallet_mismatch`);
-      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
+      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account', code: ErrorCode.WALLET_MISMATCH });
       return;
     }
 
@@ -138,23 +129,37 @@ export async function unlockContact(req: Request, res: Response, next: NextFunct
   }
 }
 
-/** POST /api/scouts/:wallet/subscribe */
+const subscribeSchema = z.object({
+  tier: z.enum(['basic', 'premium']),
+  duration: z.number().int().min(1).max(365),
+});
+
+/**
+ * POST /api/scouts/:wallet/subscribe
+ *
+ * Accepts an optional `Idempotency-Key` header.  When provided the first
+ * response is cached for 24 hours; subsequent requests with the same key
+ * return the cached response without triggering a new on-chain transaction.
+ * The idempotency behaviour is handled by the idempotency middleware applied
+ * in the route definition — no extra logic is required here.
+ */
 export async function subscribe(req: Request, res: Response, next: NextFunction) {
   try {
     const { wallet } = req.params;
-    const { tier, duration } = req.body as { tier?: 'basic' | 'premium'; duration?: number };
 
-    if ((req as any).account !== wallet) {
+    if (req.account !== wallet) {
       logger.warn(`[scout] action=subscribe_denied scout=${wallet} reason=wallet_mismatch`);
-      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
+      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account', code: ErrorCode.WALLET_MISMATCH });
       return;
     }
 
-    if (!tier || !duration || !['basic', 'premium'].includes(tier) || duration < 1 || duration > 365) {
-      res.status(400).json({ success: false, error: 'tier must be basic or premium and duration must be between 1 and 365' });
+    const parsed = subscribeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
 
+    const { tier, duration } = parsed.data;
     const result = await purchaseSubscription(wallet, tier, duration);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
@@ -174,13 +179,13 @@ export async function submitTrialOffer(req: Request, res: Response, next: NextFu
 
     if ((req as any).account !== wallet) {
       logger.warn(`[scout] action=log_trial_offer_denied scout=${wallet} playerId=${playerId} reason=wallet_mismatch`);
-      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
+      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account', code: ErrorCode.WALLET_MISMATCH });
       return;
     }
 
     const playerExists = getEvents('player_registered').some((e) => e.payload.player_id === playerId);
     if (!playerExists) {
-      res.status(404).json({ success: false, error: 'Player not found' });
+      res.status(404).json({ success: false, error: 'Player not found', code: ErrorCode.PLAYER_NOT_FOUND });
       return;
     }
 
@@ -189,13 +194,14 @@ export async function submitTrialOffer(req: Request, res: Response, next: NextFu
       res.status(402).json({
         success: false,
         error: 'Scout must be subscribed or have paid the contact fee for this player',
+        code: ErrorCode.SUBSCRIPTION_REQUIRED,
       });
       return;
     }
 
     logger.info(`[scout] action=log_trial_offer_attempt scout=${wallet} playerId=${playerId}`);
 
-    const result = await logTrialOffer(wallet, playerId, detailsUri);
+    const result = await (await import('../services/stellar')).logTrialOffer(wallet, playerId, detailsUri);
     res.status(201).json({ success: true, data: result });
   } catch (err) {
     if (err instanceof PaymentError) {
@@ -206,13 +212,12 @@ export async function submitTrialOffer(req: Request, res: Response, next: NextFu
   }
 }
 
-/** GET /api/scouts/:wallet/payments — placeholder payment history */
+/** GET /api/scouts/:wallet/payments */
 export async function getPaymentHistory(req: Request, res: Response, next: NextFunction) {
   try {
     const { wallet } = req.params;
     const { from, to } = req.query as { from?: string; to?: string };
 
-    // Derive mock history from indexed contact_unlocked events
     let payments = getEvents('contact_unlocked')
       .filter((e) => e.payload.scout === wallet)
       .map((e, i) => ({
@@ -233,36 +238,6 @@ export async function getPaymentHistory(req: Request, res: Response, next: NextF
 
     res.json({ success: true, data: payments });
   } catch (err) {
-    next(err);
-  }
-}
-
-const subscribeSchema = z.object({
-  tier: z.enum(['basic', 'premium']),
-  duration: z.number().int().min(1).max(365),
-});
-
-/** POST /api/scouts/:wallet/subscribe */
-export async function subscribe(req: Request, res: Response, next: NextFunction) {
-  try {
-    const { wallet } = req.params;
-    if (req.account !== wallet) {
-      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
-      return;
-    }
-    const parsed = subscribeSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body' });
-      return;
-    }
-    const { tier, duration } = parsed.data;
-    const result = await purchaseSubscription(wallet, tier, duration);
-    res.status(201).json({ success: true, data: result });
-  } catch (err) {
-    if (err instanceof PaymentError) {
-      res.status(402).json({ success: false, error: err.message, code: err.code });
-      return;
-    }
     next(err);
   }
 }
