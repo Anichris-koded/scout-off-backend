@@ -93,6 +93,15 @@ const config = {
     process.env.SUBSCRIPTION_GRACE_PERIOD_HOURS ?? '24',
     10,
   ),
+  /** Global request timeout in milliseconds before the server responds with 503. */
+  requestTimeoutMs: parseInt(process.env.REQUEST_TIMEOUT_MS ?? '30000', 10),
+  requestLog: {
+    skipPaths: (process.env.LOG_SKIP_PATHS ?? '/health,/health/liveness,/health/readiness,/ready,/metrics')
+      .split(',').map(p => p.trim()).filter(Boolean),
+    sampleRate: parseFloat(process.env.LOG_SAMPLE_RATE ?? '1'),
+  },
+  /** TTL for player list cache entries in milliseconds. */
+  playerCacheTtlMs: parseInt(process.env.PLAYER_CACHE_TTL_MS ?? '60000', 10),
 };
 
 export default config;

@@ -13,8 +13,9 @@ import {
 } from "../db";
 
 import { queryMilestones, updateProfile } from "../services/stellar";
-import { invalidatePlayerCache } from "../services/cache";
+import { cacheGet, cacheSet, invalidatePlayerCache } from "../services/cache";
 import { ApiResponse } from "../types";
+import { ErrorCode } from "../utils/errorCodes";
 import { getTierMeta } from "../utils/tier";
 import { validateMinTier } from "../utils/minTierValidator";
 import { normalizePosition } from "../utils/positionAliases";
@@ -129,6 +130,14 @@ export async function getPlayer(
   }
 }
 
+interface FilterPlayersResult {
+  data: Record<string, unknown>[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pages: number;
+}
+
 /** GET /api/players?region=&position=&minTier= */
 export async function filterPlayers(
   req: Request,
@@ -148,6 +157,20 @@ export async function filterPlayers(
     const normalizedPosition = sanitizedPosition
       ? normalizePosition(sanitizedPosition)
       : undefined;
+
+    const cacheKey = `players:list:${JSON.stringify({
+      region: sanitizedRegion ?? null,
+      position: normalizedPosition ?? sanitizedPosition ?? null,
+      minTier: minTier ?? null,
+      page,
+      pageSize,
+    })}`;
+
+    const cached = cacheGet<FilterPlayersResult>(cacheKey);
+    if (cached) {
+      res.json({ success: true, ...cached });
+      return;
+    }
 
     const rows = queryPlayers({
       region: sanitizedRegion,
@@ -174,6 +197,9 @@ export async function filterPlayers(
       ...enrichPlayerResult(row.progress_level),
     }));
 
+    const result: FilterPlayersResult = { data: enriched, total, page, pageSize, pages };
+    cacheSet(cacheKey, result);
+
     const scoutWallet = (req as any).account ?? 'anonymous';
     recordAudit(scoutWallet, 'player_search', {
       region: sanitizedRegion ?? null,
@@ -184,7 +210,7 @@ export async function filterPlayers(
       resultCount: total,
     });
 
-    res.json({ success: true, data: enriched, total, page, pageSize, pages });
+    res.json({ success: true, ...result });
   } catch (err) {
     next(err);
   }

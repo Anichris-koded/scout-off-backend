@@ -421,36 +421,6 @@ export async function getPaymentHistory(req: Request, res: Response, next: NextF
   }
 }
 
-const subscribeSchema = z.object({
-  tier: z.enum(['basic', 'premium']),
-  duration: z.number().int().min(1).max(365),
-});
-
-/** POST /api/scouts/:wallet/subscribe */
-export async function subscribe(req: Request, res: Response, next: NextFunction) {
-  try {
-    const { wallet } = req.params;
-    if (req.account !== wallet) {
-      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
-      return;
-    }
-    const parsed = subscribeSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body' });
-      return;
-    }
-    const { tier, duration } = parsed.data;
-    const result = await purchaseSubscription(wallet, tier, duration);
-    res.status(201).json({ success: true, data: result });
-  } catch (err) {
-    if (err instanceof PaymentError) {
-      res.status(402).json({ success: false, error: err.message, code: err.code });
-      return;
-    }
-    next(err);
-  }
-}
-
 /** GET /api/scouts/:wallet/contacts/:playerId */
 export async function getContactDetails(req: Request, res: Response, next: NextFunction) {
   try {
