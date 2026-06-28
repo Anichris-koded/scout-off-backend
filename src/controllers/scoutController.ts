@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { getEvents } from '../db';
+import { getEvents, getPlayerById } from '../db';
 import { submitContactPayment, isSubscribed, purchaseSubscription, PaymentError } from '../services/stellar';
 import { logger } from '../utils/logger';
 import { isValidEvidenceUri } from './validatorController';
@@ -266,3 +266,42 @@ export async function subscribe(req: Request, res: Response, next: NextFunction)
     next(err);
   }
 }
+
+/** GET /api/scouts/:wallet/contacts/:playerId */
+export async function getContactDetails(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { wallet, playerId } = req.params;
+    if (req.account !== wallet) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    const player = getPlayerById(playerId);
+    if (!player) {
+      res.status(404).json({ success: false, error: 'Player not found' });
+      return;
+    }
+
+    const hasUnlocked = getEvents('contact_unlocked').some(
+      (e) => e.payload.scout === wallet && e.payload.player_id === playerId
+    );
+
+    if (!hasUnlocked) {
+      res.status(403).json({ success: false, error: 'Contact not unlocked' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        playerId: player.player_id,
+        wallet: player.wallet,
+        email: `${player.player_id}@example.com`,
+        phone: '+1-555-0199',
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
