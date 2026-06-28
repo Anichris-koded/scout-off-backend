@@ -43,6 +43,11 @@ const config = {
     apiKey: process.env.PINATA_API_KEY ?? '',
     secret: process.env.PINATA_SECRET ?? '',
     gateway: process.env.PINATA_GATEWAY ?? 'https://gateway.pinata.cloud',
+    gateways: (process.env.IPFS_GATEWAYS || '').split(',').map(g => g.trim()).filter(Boolean) || [
+      'https://gateway.pinata.cloud',
+      'https://cloudflare-ipfs.com',
+      'https://ipfs.io',
+    ],
   },
   platformFeeBps: parseInt(process.env.PLATFORM_FEE_BPS ?? '500', 10),
   platformSecret: process.env.PLATFORM_SECRET ?? '',

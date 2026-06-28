@@ -3,6 +3,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol};
 use scout_off_shared::{
     errors::Error,
+    events::{emit_contact_unlocked, emit_scout_subscribed},
     storage::{bump_instance, is_initialized, set_initialized},
 };
 
@@ -62,7 +63,7 @@ impl SubscriptionContract {
             .instance()
             .set(&DataKey::Subscription(scout.clone()), &expiry);
         bump_instance(&env);
-        let _ = tier;
+        emit_scout_subscribed(&env, &scout, tier, duration_ledgers, expiry);
         Ok(())
     }
 
@@ -76,6 +77,7 @@ impl SubscriptionContract {
             .instance()
             .set(&DataKey::ContactFee(scout.clone(), player_id), &true);
         bump_instance(&env);
+        emit_contact_unlocked(&env, &scout, player_id);
         Ok(())
     }
 
@@ -97,5 +99,22 @@ impl SubscriptionContract {
         env.storage()
             .instance()
             .has(&DataKey::ContactFee(scout, player_id))
+    }
+
+    /// Update platform fee (in basis points). Only admin can call this.
+    pub fn set_platform_fee_bps(env: Env, admin: Address, platform_fee_bps: u32) -> Result<(), Error> {
+        if !is_initialized(&env) {
+            return Err(Error::NotInitialized);
+        }
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformFeeBps, &platform_fee_bps);
+        bump_instance(&env);
+        Ok(())
     }
 }
