@@ -31,6 +31,7 @@ import { submitContactPayment, purchaseSubscription, isSubscribed, logTrialOffer
 const mockGetEvents = getEvents as jest.Mock;
 const mockGetPlayerById = getPlayerById as jest.Mock;
 const mockSubmitContactPayment = submitContactPayment as jest.Mock;
+const mockPurchaseSubscription = purchaseSubscription as jest.Mock;
 const mockIsSubscribed = isSubscribed as jest.Mock;
 const mockLogTrialOffer = logTrialOffer as jest.Mock;
 const mockPurchaseSubscription = purchaseSubscription as jest.Mock;

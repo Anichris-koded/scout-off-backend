@@ -52,6 +52,17 @@ router.get('/events/export', requireRole('admin'), exportEvents);
 router.get('/fees', requireRole('admin'), getFeeSummary);
 
 /**
+ * GET /api/admin/audit
+ *
+ * Returns paginated audit log entries. Supports `startDate`, `endDate` (ISO 8601),
+ * `action` filters, and `limit`/`offset` pagination.
+ *
+ * @response 200 { success: true, data: AuditLogRow[], total, limit, offset }
+ * @auth Bearer (admin role required)
+ */
+router.get('/audit', requireRole('admin'), getAuditLog);
+
+/**
  * POST /api/admin/fees
  *
  * Withdraws accumulated platform fees from the Soroban contract to a specified recipient.
