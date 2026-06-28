@@ -1,38 +1,85 @@
 #!/usr/bin/env node
 /**
- * Checks that every env var referenced in src/ is present in .env.example.
- * Run with: node scripts/validate-env.js
- * CI fails if exit code is non-zero.
+ * Environment variable validation script.
+ *
+ * Two modes:
+ *   1. CI / documentation check (default): verifies every process.env.VAR
+ *      referenced in src/ is listed in .env.example.
+ *   2. Runtime startup check (--runtime): verifies required vars are set in
+ *      the current process environment and validates NODE_ENV.
+ *
+ * Usage:
+ *   node scripts/validate-env.js            # CI documentation check
+ *   node scripts/validate-env.js --runtime  # called by src/config.ts on startup
  */
 const fs = require('fs');
 const path = require('path');
-const glob = require('glob'); // uses Node 22 built-in glob or falls back
 
+// ─── Required vars that must be present at runtime ───────────────────────────
+const REQUIRED_RUNTIME_VARS = ['CONTRACT_ID', 'JWT_SECRET'];
+
+// Valid NODE_ENV values; defaults to 'development' when unset.
+const VALID_NODE_ENVS = ['development', 'test', 'production'];
+
+// ─── Runtime check ────────────────────────────────────────────────────────────
+if (process.argv.includes('--runtime')) {
+  const errors = [];
+
+  // Validate NODE_ENV
+  const nodeEnv = process.env.NODE_ENV ?? 'development';
+  if (!VALID_NODE_ENVS.includes(nodeEnv)) {
+    errors.push(`NODE_ENV="${nodeEnv}" is invalid. Must be one of: ${VALID_NODE_ENVS.join(', ')}`);
+  }
+
+  // Validate required vars
+  for (const key of REQUIRED_RUNTIME_VARS) {
+    if (!process.env[key]) {
+      errors.push(`Missing required environment variable: ${key}`);
+    }
+  }
+
+  if (errors.length) {
+    errors.forEach(e => console.error(`[env] ERROR: ${e}`));
+    process.exit(1);
+  }
+
+  console.log('[env] All required environment variables are set ✓');
+  process.exit(0);
+}
+
+// ─── CI / documentation check ────────────────────────────────────────────────
 const examplePath = path.resolve(__dirname, '../.env.example');
 const exampleKeys = new Set(
-  fs.readFileSync(examplePath, 'utf8')
+  fs
+    .readFileSync(examplePath, 'utf8')
     .split('\n')
-    .filter(l => l && !l.startsWith('#'))
-    .map(l => l.split('=')[0].trim())
+    .filter((l) => l && !l.startsWith('#'))
+    .map((l) => l.split('=')[0].trim())
 );
 
-const srcFiles = fs.readdirSync(path.resolve(__dirname, '../src'), { recursive: true })
-  .filter(f => f.endsWith('.ts'))
-  .map(f => path.resolve(__dirname, '../src', f));
+const srcFiles = fs
+  .readdirSync(path.resolve(__dirname, '../src'), { recursive: true })
+  .filter((f) => f.endsWith('.ts'))
+  .map((f) => path.resolve(__dirname, '../src', f));
 
-const missing = [];
+const undocumented = [];
 for (const file of srcFiles) {
   const content = fs.readFileSync(file, 'utf8');
-  const matches = [...content.matchAll(/process\.env\.([A-Z_]+)/g)];
+  const codeOnly = content
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .join('\n');
+  const matches = [...codeOnly.matchAll(/process\.env\.([A-Z_]+)/g)];
   for (const [, key] of matches) {
-    if (!exampleKeys.has(key)) missing.push({ key, file });
+    if (!exampleKeys.has(key)) undocumented.push({ key, file });
   }
 }
 
-if (missing.length) {
+if (undocumented.length) {
   console.error('Missing from .env.example:');
-  missing.forEach(({ key, file }) => console.error(`  ${key}  (${file})`));
+  undocumented.forEach(({ key, file }) => console.error(`  ${key}  (${file})`));
   process.exit(1);
 }
 
-console.log('All env vars documented in .env.example ✓');
+console.log('Environment validation passed ✓');

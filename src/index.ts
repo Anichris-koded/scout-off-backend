@@ -1,43 +1,73 @@
-import express from 'express';
-import cors from 'cors';
+import { initTracing } from './tracing';
+initTracing();
+
+import app from './app';
 import config from './config';
-import authRoutes from './routes/auth';
-import playerRoutes from './routes/player';
-import scoutRoutes from './routes/scout';
-import validatorRoutes from './routes/validator';
-import adminRoutes from './routes/admin';
-import { errorHandler } from './middleware/errorHandler';
+import { logger } from './utils/logger';
+import { initDb } from './db';
+import { stellarHealth } from './services/stellar';
+import { checkHealth } from './services/ipfs';
 import { indexEvents } from './services/indexer';
+import { getLastLedger, setLastLedger } from './db';
 
-const app = express();
+initDb();
 
-app.use(cors());
-app.use(express.json());
+// If INDEXER_BACKFILL_FROM_LEDGER is set and is less than the stored last_ledger,
+// reset last_ledger so the next poll replays from that point.
+if (config.backfillFromLedger !== null) {
+  const stored = getLastLedger();
+  if (config.backfillFromLedger < stored) {
+    setLastLedger(config.backfillFromLedger);
+    logger.info(`Backfill: reset last_ledger from ${stored} to ${config.backfillFromLedger}`);
+  }
+}
 
-app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+async function startServer() {
+  // Validate Pinata credentials at startup
+  try {
+    await checkHealth();
+    logger.info('Pinata credential validation successful');
+  } catch (err) {
+    logger.error('Pinata credential validation failed at startup:', err);
+    process.exit(1);
+  }
 
-app.use('/auth', authRoutes);
-app.use('/api/players', playerRoutes);
-app.use('/api/scouts', scoutRoutes);
-app.use('/api/validators', validatorRoutes);
-app.use('/api/admin', adminRoutes);
+  app.listen(config.port, () => {
+    logger.info(`ScoutOff backend running on port ${config.port} [${config.network}]`);
 
-app.use(errorHandler);
+    // Log startup health of critical dependencies
+    (async () => {
+      const statuses: Record<string, string> = { ipfs: 'ok' };
 
-app.listen(config.port, () => {
-  console.log(`ScoutOff backend running on port ${config.port} [${config.network}]`);
+      if (config.stellarHealthCheckEnabled) {
+        try {
+          const sOk = await stellarHealth();
+          statuses.stellar = sOk ? 'ok' : 'unavailable';
+        } catch {
+          statuses.stellar = 'unavailable';
+        }
+      } else {
+        statuses.stellar = 'disabled';
+      }
 
-  // Poll for new contract events every 5 seconds
-  const poll = async () => {
-    try {
-      await indexEvents();
-    } catch (err) {
-      console.error('Indexer error:', (err as Error).message);
-    }
-  };
+      logger.info(`Startup health: ${JSON.stringify(statuses)}`);
+    })();
 
-  poll();
-  setInterval(poll, 5_000);
+    // Poll for new contract events every 5 seconds
+    const poll = async () => {
+      try {
+        await indexEvents();
+      } catch (err) {
+        logger.error('Indexer error:', (err as Error).message);
+      }
+    };
+
+    poll();
+    setInterval(poll, 5_000);
+  });
+}
+
+startServer().catch(err => {
+  logger.error('Unhandled startup error:', err);
+  process.exit(1);
 });
-
-export default app;
