@@ -1,0 +1,95 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scout-off-backend:local
+    container_name: scout-off-backend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-4000}:4000"
+    volumes:
+      # Named volume keeps the SQLite DB file across restarts and `docker compose down`
+      - scout_db:/data
+    environment:
+      NODE_ENV: development
+
+      # ── Server ────────────────────────────────────────────────────
+      PORT: "4000"
+
+      # ── Auth (REQUIRED — change before first run) ─────────────────
+      # Generate a strong secret: openssl rand -hex 32
+      JWT_SECRET: "change-me-to-a-long-random-secret-at-least-32-chars"
+      ADMIN_WALLET: ""
+
+      # ── Stellar / Soroban ─────────────────────────────────────────
+      # CONTRACT_ID is required by the app — replace with your deployed Soroban contract
+      # address. The placeholder below satisfies the startup check; the indexer will log
+      # errors on each poll until a real contract ID is supplied.
+      CONTRACT_ID: "PLACEHOLDER_REPLACE_WITH_REAL_CONTRACT_ID"
+      NETWORK: testnet
+      NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      HORIZON_URL: "https://horizon-testnet.stellar.org"
+      SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org"
+
+      # ── Database ──────────────────────────────────────────────────
+      # Mapped to the named volume mount point set in the Dockerfile
+      DB_PATH: /data/scout-off.db
+
+      # ── IPFS / Pinata (optional in development) ───────────────────
+      PINATA_API_KEY: ""
+      PINATA_SECRET: ""
+      PINATA_GATEWAY: "https://gateway.pinata.cloud"
+
+      # ── Platform ──────────────────────────────────────────────────
+      PLATFORM_FEE_BPS: "500"
+      LOG_LEVEL: info
+
+      # ── Feature flags ─────────────────────────────────────────────
+      # Disable Stellar health check so the server starts cleanly
+      # even when CONTRACT_ID is not yet set
+      STELLAR_HEALTH_CHECK: "false"
+      JSON_PAYLOAD_LIMIT: 1mb
+
+      # ── Rate limiting ─────────────────────────────────────────────
+      RATE_LIMIT_ENABLED: "true"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      RATE_LIMIT_MAX: "60"
+
+      # ── Webhooks (off by default) ─────────────────────────────────
+      WEBHOOK_ENABLED: "false"
+      WEBHOOK_URL: ""
+
+      # ── Security headers ──────────────────────────────────────────
+      SECURITY_HSTS: "max-age=31536000; includeSubDomains"
+      SECURITY_X_CONTENT_TYPE_OPTIONS: nosniff
+      SECURITY_X_FRAME_OPTIONS: DENY
+      SECURITY_REFERRER_POLICY: no-referrer
+
+      # ── API versioning ────────────────────────────────────────────
+      API_PREFIX: /api
+      API_V: v1
+
+      # ── Metrics ───────────────────────────────────────────────────
+      METRICS_ENABLED: "false"
+
+      # ── Milestone rate limiting ───────────────────────────────────
+      MILESTONE_RATE_WINDOW_MS: "60000"
+      MILESTONE_RATE_MAX: "10"
+
+      # ── Redis (optional) ──────────────────────────────────────────
+      REDIS_URL: ""
+
+      # ── Proxy ─────────────────────────────────────────────────────
+      TRUSTED_PROXY_COUNT: "0"
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health/liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  # Named volume — survives `docker compose down` (data is only lost on `down -v`)
+  scout_db:

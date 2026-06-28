@@ -4,23 +4,23 @@ module.exports = {
     project: './tsconfig.eslint.json',
     tsconfigRootDir: __dirname,
     ecmaVersion: 2020,
-    sourceType: 'module',
+    sourceType: 'module'
   },
   plugins: ['@typescript-eslint'],
   extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended'],
   env: {
     node: true,
     jest: true,
-    es2021: true,
+    es2021: true
   },
   rules: {
     '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
-    'no-console': 'error',
+    'no-console': 'error'
   },
   overrides: [
     {
       files: ['src/utils/logger.ts'],
-      rules: { 'no-console': 'off' },
-    },
-  ],
+      rules: { 'no-console': 'off' }
+    }
+  ]
 };
