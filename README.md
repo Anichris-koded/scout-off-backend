@@ -332,6 +332,7 @@ npm run dev
 | `npm start` | `node dist/index.js` | Run the compiled server (run `build` first) |
 | `npm test` | `jest --runInBand` | Run the test suite |
 | `npm run lint` | `eslint 'src/**/*.ts' 'tests/**/*.ts' --ext .ts` | Run TypeScript linting |
+| `npm run seed` | `ts-node --project tsconfig.scripts.json scripts/seed.ts` | Seed the local DB with sample data |
 
 On startup the server will:
 - Open (or create) a SQLite database at `DB_PATH` (default: `scout-off.db`)
@@ -339,6 +340,99 @@ On startup the server will:
 - Fail fast if `CONTRACT_ID` or `JWT_SECRET` are missing
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions.
+
+## Docker
+
+The fastest way to run the backend locally. No Node.js installation required — Docker handles everything.
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes both `docker` and `docker compose`)
+
+### Start the service
+
+```bash
+docker compose up
+```
+
+This will:
+
+1. Build a multi-stage image (TypeScript compilation in the builder stage, lean Alpine runtime)
+2. Start the backend on **port 4000**
+3. Create a named volume (`scout_db`) so the SQLite database survives restarts
+
+The API is ready when you see:
+
+```
+scout-off-backend  | {"level":"info","msg":"ScoutOff backend running on port 4000 [testnet]"}
+```
+
+Verify it's up:
+
+```bash
+curl http://localhost:4000/health/liveness
+# → {"status":"ok"}
+```
+
+### Required variables before going further
+
+The `docker-compose.yml` ships with sensible defaults so the service starts without changes. Both required variables have placeholder values that satisfy the startup check. Update them in `docker-compose.yml` (or override with a local `.env` file) when you're ready to connect to a real contract:
+
+| Variable | Default in compose | Description |
+|----------|--------------------|-------------|
+| `CONTRACT_ID` | `PLACEHOLDER_REPLACE_WITH_REAL_CONTRACT_ID` | Your deployed ScoutOff Soroban contract address |
+| `JWT_SECRET` | `change-me-to-a-long-random-secret-at-least-32-chars` | Secret for signing JWTs — generate with `openssl rand -hex 32` |
+
+### Run in the background (detached)
+
+```bash
+docker compose up -d
+```
+
+View logs at any time:
+
+```bash
+docker compose logs -f
+```
+
+### Stop the service
+
+```bash
+docker compose down
+```
+
+SQLite data is preserved in the `scout_db` volume. To also delete the volume and start fresh:
+
+```bash
+docker compose down -v
+```
+
+### Build the image standalone
+
+```bash
+docker build -t scout-off-backend .
+```
+
+Run it with environment variables:
+
+```bash
+docker run --rm \
+  -p 4000:4000 \
+  -v scout_db:/data \
+  -e CONTRACT_ID=your_contract_id \
+  -e JWT_SECRET=your_secret \
+  scout-off-backend
+```
+
+### Customise the port
+
+Set `PORT` in `docker-compose.yml` or prefix the command:
+
+```bash
+PORT=5000 docker compose up
+```
+
+The host port mapping follows the `PORT` variable; the container always listens on 4000 internally.
 
 ## Backend Local Development
 
@@ -412,6 +506,58 @@ Runs the full backend test suite with Jest. Tests are located in the [`tests/`](
 - [`tests/utils/`](tests/utils/) — utility unit tests (CID validator, tier, logger, etc.)
 - [`tests/services/`](tests/services/) — service unit tests (IPFS, indexer, SEP-10, etc.)
 
+### Seed the Database
+
+New contributors can populate the local SQLite database with realistic sample data using the included seed script. This gives you players, scout subscriptions, and milestone events to work with immediately — no manual API calls required.
+
+```bash
+npm run seed
+# or equivalently:
+npx ts-node --project tsconfig.scripts.json scripts/seed.ts
+```
+
+The seed script is **idempotent** — running it multiple times is safe; existing rows are skipped.
+
+**What gets seeded:**
+
+| Data | Count | Details |
+|------|-------|---------|
+| Players | 5 | Across regions: West Africa, East Africa, South America, Europe, Southeast Asia |
+| Positions | 5 | Forward, Midfielder, Defender, Goalkeeper, Winger |
+| Progress tiers | 0–3 | One player at each tier level, showcasing the full tier model |
+| Milestone events | 3 | Performance, identity, and trial-offer milestones |
+| Scout subscriptions | 2 | One premium (90 days) and one basic (30 days), both currently active |
+| Contact unlocks | 2 | Scout Alpha → Player 001, Scout Beta → Player 003 |
+
+**Example output:**
+```
+🌱  ScoutOff seed starting…
+
+  Players   inserted=5  skipped=0
+    + seed-player-001, seed-player-002, seed-player-003, seed-player-004, seed-player-005
+  Events    inserted=12  skipped=0
+
+✅  Seed complete
+  DB totals — players: 5  events: 12  milestones: 3  subscriptions: 2
+
+  Scout wallets for manual API testing:
+    Scout Alpha (premium): GFAZQXNK3BFMN7XRVGBAEZI3BYWDXHZVJBDG5AXBLYMN6VJXVHAJBGZE
+    Scout Beta  (basic):   GHAJBGZFAZQXNK3BFMN7XRVGBAEZI3BYWDXHZVJBDG5AXBLYMN6VJXVB
+```
+
+After seeding, try these requests locally:
+
+```bash
+# List all players
+curl http://localhost:4000/api/players
+
+# Filter by region and tier
+curl "http://localhost:4000/api/players?region=West%20Africa&minTier=2"
+
+# Get a specific player
+curl http://localhost:4000/api/players/seed-player-003
+```
+
 ### Lint
 
 ```bash
@@ -431,7 +577,7 @@ The backend exposes two health check endpoints for monitoring and orchestration 
 
 Liveness check. Returns `200` as long as the process is running.
 
-Optionally includes a Stellar RPC connectivity check, controlled by the `STELLAR_HEALTH_CHECK_ENABLED` env var (default: `true`).
+Optionally includes a Stellar RPC connectivity check, controlled by the `STELLAR_HEALTH_CHECK_ENABLED` env var (default: `true`). Always includes a lightweight SQLite database probe (`SELECT 1`).
 
 **Middleware module:** `src/services/stellar.ts` (`stellarHealth`)
 
@@ -440,7 +586,8 @@ Optionally includes a Stellar RPC connectivity check, controlled by the `STELLAR
 {
   "status": "ok",
   "healthStatus": {
-    "stellar": "ok"
+    "stellar": "ok",
+    "db": "ok"
   }
 }
 ```
@@ -450,18 +597,30 @@ Optionally includes a Stellar RPC connectivity check, controlled by the `STELLAR
 {
   "status": "ok",
   "healthStatus": {
-    "stellar": "disabled"
+    "stellar": "disabled",
+    "db": "ok"
   }
 }
 ```
 
-> **Monitoring note:** Use `/health` as a liveness probe. A non-`200` response indicates the process has crashed and should be restarted.
+**Example response (DB unreachable):**
+```json
+{
+  "status": "ok",
+  "healthStatus": {
+    "stellar": "ok",
+    "db": "error"
+  }
+}
+```
+
+> **Monitoring note:** `/health` is a liveness probe — it always returns `200`. A DB probe failure surfaces as `db: "error"` in the body without changing the HTTP status. Use `/ready` to gate traffic on DB health.
 
 ### GET /ready
 
 Readiness probe. Returns `200` when all service dependencies are reachable. Returns `503` when any dependency is unavailable.
 
-Currently checks: **IPFS (Pinata)** storage connectivity.
+Currently checks: **IPFS (Pinata)** storage connectivity and the **SQLite database**.
 
 **Middleware module:** `src/services/ipfs.ts` (`checkHealth`)
 
@@ -470,17 +629,30 @@ Currently checks: **IPFS (Pinata)** storage connectivity.
 {
   "status": "ok",
   "services": {
-    "ipfs": "ok"
+    "ipfs": "ok",
+    "db": "ok"
   }
 }
 ```
 
-**Example response (degraded):**
+**Example response (degraded — IPFS down):**
 ```json
 {
   "status": "degraded",
   "services": {
-    "ipfs": "unavailable"
+    "ipfs": "unavailable",
+    "db": "ok"
+  }
+}
+```
+
+**Example response (degraded — DB locked):**
+```json
+{
+  "status": "degraded",
+  "services": {
+    "ipfs": "ok",
+    "db": "unavailable"
   }
 }
 ```
@@ -492,9 +664,11 @@ Currently checks: **IPFS (Pinata)** storage connectivity.
 | Endpoint | Dependency | Stub / Module |
 |----------|-----------|---------------|
 | `/health` | Stellar RPC (`SOROBAN_RPC_URL`) | `src/services/stellar.ts` — `stellarHealth()` |
+| `/health` | SQLite database | `src/db` — `getDb()` + `SELECT 1` probe with 2 s timeout |
 | `/ready` | IPFS / Pinata (`PINATA_API_KEY`) | `src/services/ipfs.ts` — `checkHealth()` |
+| `/ready` | SQLite database | `src/db` — `getDb()` + `SELECT 1` probe with 2 s timeout |
 
-Both dependency checks are stubbed in tests — see `tests/routes/health.test.ts`.
+Both external dependency checks are stubbed in tests — see `tests/routes/health.test.ts`.
 
 ### IPFS Service Dependency
 

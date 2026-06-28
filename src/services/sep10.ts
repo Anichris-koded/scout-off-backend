@@ -97,12 +97,6 @@ export function verifyAndIssueToken(xdr: string, role?: string): { token: string
     throw new Error('Invalid challenge: no operations found');
   }
 
-  // Reject expired or replayed challenges per SEP-10 timeBounds.maxTime
-  const maxTime = Number(tx.timeBounds?.maxTime ?? 0);
-  if (maxTime > 0 && Math.floor(Date.now() / 1000) > maxTime) {
-    throw new Error('Challenge has expired');
-  }
-
   const op = tx.operations[0];
 
   // 1. Verify the first operation is manageData

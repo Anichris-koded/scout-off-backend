@@ -6,6 +6,10 @@
 //   - In production (NODE_ENV=production) pin operations throw immediately with a
 //     clear error so misconfiguration is caught at call time rather than silently.
 //
+// IPFS failure handling (#346):
+//   - Failures emit a CRITICAL log entry.
+//   - The JSON payload is queued in the pending_pins SQLite table for async retry.
+//
 // Service dependency: Pinata (https://pinata.cloud)
 //   Required env vars: PINATA_API_KEY, PINATA_SECRET
 //   Optional env var:  PINATA_GATEWAY (default: https://gateway.pinata.cloud)
@@ -14,6 +18,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import config from '../config';
 import { logger } from '../utils/logger';
+import { insertPendingPin, getPendingPins, deletePendingPin, incrementPendingPinAttempts } from '../db';
 
 const PINATA_PIN_JSON_URL = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
 const PINATA_PIN_FILE_URL = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
@@ -48,8 +53,14 @@ export async function pinJson(body: object): Promise<string> {
     logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinJson');
     return devStubCid(JSON.stringify(body));
   }
-  const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
-  return res.data.IpfsHash as string;
+  try {
+    const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
+    return res.data.IpfsHash as string;
+  } catch (err) {
+    logger.critical('[ipfs] Pinata unavailable — queueing payload for retry', (err as Error).message);
+    insertPendingPin(body);
+    throw err;
+  }
 }
 
 /** Pin a file buffer to IPFS via Pinata. Returns the CID. */
@@ -97,4 +108,23 @@ export async function checkHealth(): Promise<void> {
   await axios.get(PINATA_TEST_URL, { headers: pinataHeaders() });
 }
 
-export default { pinJson, pinFile, gatewayUrl, gatewayUrls, getCid, checkHealth };
+/**
+ * Retry queued pending_pins entries. Called periodically when IPFS recovers.
+ * Successfully pinned entries are removed from the queue.
+ */
+export async function retryPendingPins(): Promise<void> {
+  if (!isPinataConfigured()) return;
+  const pending = getPendingPins();
+  for (const row of pending) {
+    try {
+      const body = JSON.parse(row.payload) as object;
+      const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
+      logger.info(`[ipfs] retried pending pin id=${row.id} cid=${res.data.IpfsHash as string}`);
+      deletePendingPin(row.id);
+    } catch {
+      incrementPendingPinAttempts(row.id);
+    }
+  }
+}
+
+export default { pinJson, pinFile, gatewayUrl, getCid, checkHealth, retryPendingPins };

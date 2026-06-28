@@ -9,6 +9,7 @@ import {
   getPlayerById,
   insertPlayerProfileHistory,
   queryPlayers,
+  countPlayers,
 } from "../db";
 
 import { queryMilestones, updateProfile } from "../services/stellar";
@@ -19,6 +20,7 @@ import { validateMinTier } from "../utils/minTierValidator";
 import { normalizePosition } from "../utils/positionAliases";
 import { dispatchEventWebhook } from "../services/webhooks";
 import { enrichPlayerResult } from "../utils/searchEnrichment";
+import { recordAudit } from "../utils/audit";
 
 const baseRegistrationSchema = z.object({
   wallet: z.string().min(56).max(56),
@@ -42,6 +44,8 @@ export const filterSchema = z.object({
   region: z.string().optional(),
   position: z.string().optional(),
   minTier: z.coerce.number().int().min(0).max(3).optional(),
+  sortBy: z.enum(['tier', 'region']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).default('asc'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -102,7 +106,7 @@ export async function getPlayer(
     const playerId = sanitizeInput(req.params.playerId);
     const row = getPlayerById(playerId);
     if (!row) {
-      res.status(404).json({ success: false, error: "Player not found" });
+      res.status(404).json({ success: false, error: "Player not found", code: ErrorCode.PLAYER_NOT_FOUND });
       return;
     }
     const { tierName, tierDescription } = getTierMeta(row.progress_level);
@@ -134,7 +138,7 @@ export async function filterPlayers(
   try {
     const tierResult = validateMinTier(req.query.minTier);
     if (!tierResult.valid) {
-      res.status(400).json({ success: false, error: tierResult.error });
+      res.status(400).json({ success: false, error: tierResult.error, code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const minTier = tierResult.tier;
@@ -169,6 +173,17 @@ export async function filterPlayers(
       created_at: row.created_at,
       ...enrichPlayerResult(row.progress_level),
     }));
+
+    const scoutWallet = (req as any).account ?? 'anonymous';
+    recordAudit(scoutWallet, 'player_search', {
+      region: sanitizedRegion ?? null,
+      position: normalizedPosition ?? sanitizedPosition ?? null,
+      minTier: minTier ?? null,
+      page,
+      pageSize,
+      resultCount: total,
+    });
+
     res.json({ success: true, data: enriched, total, page, pageSize, pages });
   } catch (err) {
     next(err);
@@ -234,6 +249,7 @@ export async function getPlayerMilestones(
       res.status(400).json({
         success: false,
         error: parsed.error.errors[0]?.message ?? "Invalid query parameters",
+        code: ErrorCode.VALIDATION_ERROR,
       });
       return;
     }

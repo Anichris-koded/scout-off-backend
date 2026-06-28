@@ -1,7 +1,16 @@
 import { server } from './stellar';
 import config from '../config';
-import { getDb, getLastLedger, setLastLedger, upsertPlayer, updatePlayerProgress } from '../db';
+import {
+  getDb,
+  getLastLedger,
+  setLastLedger,
+  upsertPlayer,
+  updatePlayerProgress,
+  getEvents,
+} from '../db';
+import { dispatchEventWebhook } from './webhooks';
 import { logger } from '../utils/logger';
+import { tierForApprovedMilestones } from './tierPromotion';
 
 /** Current indexer lag in ledgers (latestChainLedger - lastIndexedLedger). Reset after each poll. */
 export let indexerLedgerLag = 0;
@@ -83,6 +92,8 @@ export async function indexEvents(): Promise<void> {
 
   if (!response.events.length) return;
 
+  const webhookEvents: Array<{ type: string; payload: unknown }> = [];
+
   const insertMany = db.transaction((events: typeof response.events) => {
     for (const raw of events) {
       const type = raw.topic[0]?.value() as string;
@@ -91,6 +102,10 @@ export async function indexEvents(): Promise<void> {
       onBeforeInsert(eventId);
       insert.run(type, raw.ledger, raw.txHash, JSON.stringify(payload));
       onAfterInsert(eventId);
+
+      if (type === 'milestone_approved') {
+        approvedMilestones.push({ type, payload });
+      }
 
       if (type === 'player_registered') {
         upsertPlayer({
@@ -101,15 +116,42 @@ export async function indexEvents(): Promise<void> {
           metadata_uri: payload.metadata_uri as string | undefined,
           created_at: raw.ledger,
         });
+      } else if (type === 'milestone_submitted') {
+        // Insert into pending_milestones
+        const milestoneId = payload.milestone_id as string;
+        const playerId = payload.player_id as string;
+        const validatorWallet = payload.validator as string;
+        const milestoneType = payload.milestone_type as string;
+        const evidenceUri = payload.evidence_uri as string;
+        const submittedAt = raw.ledger;
+        if (milestoneId && playerId && validatorWallet) {
+          insertPendingMilestone(milestoneId, playerId, validatorWallet, milestoneType, evidenceUri, submittedAt);
+        }
+        webhookEvents.push({ type, payload });
       } else if (type === 'milestone_approved') {
         const playerId = payload.player_id as string;
-        const level = Number(payload.progress_level ?? 0);
-        if (playerId) updatePlayerProgress(playerId, level);
+        if (playerId) {
+          // Tier promotion (#359): derive the player's tier from the total number
+          // of approved milestones now recorded for them, rather than trusting a
+          // progress_level field on the event payload. The just-inserted event is
+          // already part of this count (same transaction), and replays are safe
+          // because the events table dedups on tx_hash.
+          const approvedMilestoneCount = getEvents('milestone_approved').filter(
+            (e) => e.payload.player_id === playerId,
+          ).length;
+          updatePlayerProgress(playerId, tierForApprovedMilestones(approvedMilestoneCount));
+        }
       }
     }
   });
 
   insertMany(response.events);
+
+  for (const { type, payload } of webhookEvents) {
+    dispatchEventWebhook(type, payload).catch((err: unknown) => {
+      logger.warn(`[indexer] webhook dispatch failed for ${type}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
 
   const latest = response.events.at(-1)!;
   setLastLedger(latest.ledger + 1);

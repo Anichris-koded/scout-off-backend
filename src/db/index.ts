@@ -54,7 +54,24 @@ export function initDb(): void {
     CREATE INDEX IF NOT EXISTS idx_players_region   ON players (region);
     CREATE INDEX IF NOT EXISTS idx_players_position ON players (position);
     CREATE INDEX IF NOT EXISTS idx_players_tier     ON players (progress_level);
+    CREATE TABLE IF NOT EXISTS validator_stats (
+      wallet             TEXT PRIMARY KEY,
+      milestones_approved INTEGER DEFAULT 0,
+      milestones_rejected INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS pending_milestones (
+      milestone_id    TEXT PRIMARY KEY,
+      player_id       TEXT NOT NULL,
+      validator_wallet TEXT NOT NULL,
+      milestone_type  TEXT NOT NULL,
+      evidence_uri    TEXT NOT NULL,
+      submitted_at    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_milestones_validator ON pending_milestones (validator_wallet);
+    CREATE INDEX IF NOT EXISTS idx_pending_milestones_player ON pending_milestones (player_id);
   `);
+  // Run SQL migrations (player_profile_history, idempotency_keys, etc.)
+  runMigrations(_db);
 }
 
 export function getDb(): Database.Database {
@@ -210,6 +227,111 @@ export function updatePlayerProgress(playerId: string, level: number): void {
   timedQuery(sql, () => getDb().prepare(sql).run(level, playerId));
 }
 
+export interface ValidatorStatsRow {
+  wallet: string;
+  milestones_approved: number;
+  milestones_rejected: number;
+}
+
+export function incrementValidatorApproved(wallet: string): void {
+  const sql = `INSERT INTO validator_stats (wallet, milestones_approved, milestones_rejected)
+               VALUES (?, 1, 0)
+               ON CONFLICT(wallet) DO UPDATE SET milestones_approved = milestones_approved + 1`;
+  timedQuery(sql, () => getDb().prepare(sql).run(wallet));
+}
+
+export function incrementValidatorRejected(wallet: string): void {
+  const sql = `INSERT INTO validator_stats (wallet, milestones_approved, milestones_rejected)
+               VALUES (?, 0, 1)
+               ON CONFLICT(wallet) DO UPDATE SET milestones_rejected = milestones_rejected + 1`;
+  timedQuery(sql, () => getDb().prepare(sql).run(wallet));
+}
+
+export function getValidatorStats(wallet: string): ValidatorStatsRow | null {
+  const sql = 'SELECT * FROM validator_stats WHERE wallet = ?';
+  return timedQuery(sql, () => 
+    (getDb().prepare(sql).get(wallet) as ValidatorStatsRow | undefined) ?? null
+  );
+}
+
+export interface PendingMilestoneRow {
+  milestone_id: string;
+  player_id: string;
+  validator_wallet: string;
+  milestone_type: string;
+  evidence_uri: string;
+  submitted_at: number;
+}
+
+export function insertPendingMilestone(
+  milestoneId: string,
+  playerId: string,
+  validatorWallet: string,
+  milestoneType: string,
+  evidenceUri: string,
+  submittedAt: number
+): void {
+  const sql = `INSERT OR IGNORE INTO pending_milestones 
+               (milestone_id, player_id, validator_wallet, milestone_type, evidence_uri, submitted_at) 
+               VALUES (?, ?, ?, ?, ?, ?)`;
+  timedQuery(sql, () => getDb().prepare(sql).run(milestoneId, playerId, validatorWallet, milestoneType, evidenceUri, submittedAt));
+}
+
+export function removePendingMilestone(milestoneId: string): void {
+  const sql = 'DELETE FROM pending_milestones WHERE milestone_id = ?';
+  timedQuery(sql, () => getDb().prepare(sql).run(milestoneId));
+}
+
+export interface GetPendingMilestonesOptions {
+  validatorWallet?: string;
+  position?: string;
+  region?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export function getPendingMilestones(options: GetPendingMilestonesOptions): { data: PendingMilestoneRow[], total: number } {
+  const db = getDb();
+  // We need to join with players to filter by position and region
+  let whereConditions: string[] = [];
+  let params: (string | number)[] = [];
+
+  if (options.validatorWallet) {
+    whereConditions.push('pm.validator_wallet = ?');
+    params.push(options.validatorWallet);
+  }
+  if (options.position) {
+    whereConditions.push('p.position = ?');
+    params.push(options.position);
+  }
+  if (options.region) {
+    whereConditions.push('p.region = ?');
+    params.push(options.region);
+  }
+
+  const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
+  // Get total count
+  const countSql = `SELECT COUNT(*) AS total FROM pending_milestones pm 
+                    LEFT JOIN players p ON pm.player_id = p.player_id 
+                    ${whereClause}`;
+  const countRow = timedQuery(countSql, () => db.prepare(countSql).get(...params) as { total: number });
+  const total = countRow.total;
+
+  // Get paginated data
+  const page = options.page || 1;
+  const pageSize = options.pageSize || 20;
+  const offset = (page - 1) * pageSize;
+  const dataSql = `SELECT pm.* FROM pending_milestones pm 
+                   LEFT JOIN players p ON pm.player_id = p.player_id 
+                   ${whereClause}
+                   ORDER BY pm.submitted_at DESC
+                   LIMIT ? OFFSET ?`;
+  const data = timedQuery(dataSql, () => db.prepare(dataSql).all(...params, pageSize, offset) as PendingMilestoneRow[]);
+
+  return { data, total };
+}
+
 export function getPlayerById(playerId: string): PlayerRow | null {
   const sql = 'SELECT * FROM players WHERE player_id = ?';
   return timedQuery(sql, () =>
@@ -235,6 +357,65 @@ function buildPlayerWhereClause(opts: QueryPlayersOptions): { where: string; par
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const sql = `SELECT * FROM players ${where} ORDER BY created_at ASC`;
-  return timedQuery(sql, () => getDb().prepare(sql).all(...params) as PlayerRow[]);
+  return { where, params };
+}
+
+// ─── Idempotency key helpers ──────────────────────────────────────────────────
+
+export interface IdempotencyRecord {
+  key: string;
+  status_code: number;
+  response: string; // raw JSON string
+  created_at: number;
+  expires_at: number;
+}
+
+const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Look up a non-expired idempotency key.
+ * Returns the stored record, or null when the key is absent or expired.
+ */
+export function getIdempotencyRecord(key: string): IdempotencyRecord | null {
+  const sql = 'SELECT * FROM idempotency_keys WHERE key = ? AND expires_at > ?';
+  const now = Date.now();
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(key, now) as IdempotencyRecord | undefined) ?? null
+  );
+}
+
+/**
+ * Persist a new idempotency key with its response payload.
+ * Silently ignores conflicts — two concurrent requests with the same key
+ * will both compute a response but only the first one to commit wins; the
+ * second one will then be served the stored value by getIdempotencyRecord.
+ */
+export function saveIdempotencyRecord(
+  key: string,
+  statusCode: number,
+  body: unknown,
+): void {
+  const now = Date.now();
+  const sql = `
+    INSERT INTO idempotency_keys (key, status_code, response, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(key) DO NOTHING
+  `;
+  timedQuery(sql, () =>
+    getDb()
+      .prepare(sql)
+      .run(key, statusCode, JSON.stringify(body), now, now + IDEMPOTENCY_TTL_MS)
+  );
+}
+
+/**
+ * Delete all idempotency records whose TTL has passed.
+ * Call this periodically (e.g., from the indexer poll loop) to keep the table small.
+ */
+export function purgeExpiredIdempotencyKeys(): number {
+  const sql = 'DELETE FROM idempotency_keys WHERE expires_at <= ?';
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(Date.now());
+    return info.changes;
+  });
 }

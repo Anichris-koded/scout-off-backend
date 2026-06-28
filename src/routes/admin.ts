@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex, updatePlatformFee } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex, getValidatorStatsEndpoint } from '../controllers/adminController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
 
@@ -50,6 +50,17 @@ router.get('/events/export', requireRole('admin'), exportEvents);
  * @auth Bearer (admin role required)
  */
 router.get('/fees', requireRole('admin'), getFeeSummary);
+
+/**
+ * GET /api/admin/audit
+ *
+ * Returns paginated audit log entries. Supports `startDate`, `endDate` (ISO 8601),
+ * `action` filters, and `limit`/`offset` pagination.
+ *
+ * @response 200 { success: true, data: AuditLogRow[], total, limit, offset }
+ * @auth Bearer (admin role required)
+ */
+router.get('/audit', requireRole('admin'), getAuditLog);
 
 /**
  * POST /api/admin/fees
@@ -148,19 +159,6 @@ router.post('/introspect', requireRole('admin'), introspectToken);
  */
 router.post('/indexer/reindex', requireRole('admin'), reindex);
 
-/**
- * POST /api/admin/platform-fee
- *
- * Submits a request to update the platform fee configuration on the Soroban contract.
- * Only platform admins may call this endpoint.
- *
- * @body platformFeeBps {number} - New platform fee in basis points (0-10000)
- * @response 202 { success: true, message: string, transactionId: string }
- * @response 400 { success: false, error: string } - Invalid platformFeeBps
- * @response 401 { success: false, error: string } - Missing token
- * @response 403 { success: false, error: string } - Non-admin role
- * @auth Bearer (admin role required)
- */
-router.post('/platform-fee', requireRole('admin'), updatePlatformFee);
+router.get('/validators/:wallet/stats', requireRole('admin'), getValidatorStatsEndpoint);
 
 export default router;

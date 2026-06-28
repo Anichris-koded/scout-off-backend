@@ -74,6 +74,24 @@ export function requireRole(role: string) {
 }
 
 /**
+ * Middleware that extracts a JWT if present but never blocks unauthenticated requests.
+ * Sets req.account and req.role when a valid Bearer token is found; otherwise no-ops.
+ */
+export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+  const header = req.headers.authorization;
+  if (header?.startsWith('Bearer ')) {
+    try {
+      const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
+      (req as any).account = payload.sub;
+      (req as any).role = payload.role;
+    } catch {
+      // Invalid/expired token — treat the request as anonymous
+    }
+  }
+  next();
+}
+
+/**
  * Middleware guard that allows access to any one of the specified roles.
  * Use this when a route should be accessible to multiple roles.
  *

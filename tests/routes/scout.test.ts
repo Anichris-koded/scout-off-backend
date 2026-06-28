@@ -6,6 +6,7 @@ const SECRET = process.env.JWT_SECRET ?? 'test-secret';
 
 jest.mock('../../src/db', () => ({
   getEvents: jest.fn(),
+  getPlayerById: jest.fn(),
 }));
 
 jest.mock('../../src/services/indexer', () => ({
@@ -17,15 +18,20 @@ jest.mock('../../src/services/stellar', () => ({
   submitContactPayment: jest.fn(),
   purchaseSubscription: jest.fn(),
   isSubscribed: jest.fn().mockResolvedValue({ active: false, expiresAt: null }),
+  renewSubscription: jest.fn(),
+  cancelSubscriptionOnChain: jest.fn(),
+  logTrialOffer: jest.fn(),
   PaymentError: class PaymentError extends Error {
     constructor(public message: string, public code: string) { super(message); }
   },
 }));
 
-import { getEvents } from '../../src/db';
+import { getEvents, getPlayerById } from '../../src/db';
 import { submitContactPayment, purchaseSubscription, isSubscribed, logTrialOffer } from '../../src/services/stellar';
 const mockGetEvents = getEvents as jest.Mock;
+const mockGetPlayerById = getPlayerById as jest.Mock;
 const mockSubmitContactPayment = submitContactPayment as jest.Mock;
+const mockPurchaseSubscription = purchaseSubscription as jest.Mock;
 const mockIsSubscribed = isSubscribed as jest.Mock;
 const mockLogTrialOffer = logTrialOffer as jest.Mock;
 const mockPurchaseSubscription = purchaseSubscription as jest.Mock;
@@ -46,7 +52,11 @@ const OTHER  = 'GOTHERWALLET2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 beforeEach(() => {
   mockGetEvents.mockReset();
+  mockGetPlayerById.mockReset();
   mockIsSubscribed.mockReset().mockResolvedValue({ active: false, expiresAt: null });
+  // Ensure getLatestSubscription returns null by default
+  const { getLatestSubscription } = require('../../src/db');
+  (getLatestSubscription as jest.Mock).mockReset().mockReturnValue(null);
 });
 
 // ─── GET /api/scouts/:wallet/subscription ─────────────────────────────────────
@@ -74,7 +84,7 @@ describe('GET /api/scouts/:wallet/subscription', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.data).toEqual({ active: false, tier: null, expiresAt: null, remainingDays: 0 });
+    expect(res.body.data).toEqual({ active: false, tier: null, expiresAt: null, remainingDays: 0, gracePeriodActive: false });
   });
 
   it('returns active subscription with correct fields', async () => {
@@ -362,3 +372,75 @@ describe('Scout route role enforcement', () => {
     expect(res.body.success).toBe(false);
   });
 });
+
+// ─── GET /api/scouts/:wallet/contacts/:playerId ──────────────────────────────
+
+describe('GET /api/scouts/:wallet/contacts/:playerId', () => {
+  const PLAYER_ID = 'player-123';
+  const MOCK_PLAYER = {
+    player_id: PLAYER_ID,
+    wallet: 'GPLAYERWALLET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+  };
+
+  it('returns 401 when no token is provided', async () => {
+    const res = await request(app).get(`/api/scouts/${WALLET}/contacts/${PLAYER_ID}`);
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 when JWT wallet does not match path wallet', async () => {
+    const token = makeToken(OTHER);
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/contacts/${PLAYER_ID}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('returns 404 when player is not found', async () => {
+    mockGetPlayerById.mockReturnValue(null);
+    const token = makeToken(WALLET);
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/contacts/${PLAYER_ID}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(404);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/Player not found/i);
+  });
+
+  it('returns 403 when scout has not unlocked the player contact', async () => {
+    mockGetPlayerById.mockReturnValue(MOCK_PLAYER);
+    mockGetEvents.mockReturnValue([]);
+    const token = makeToken(WALLET);
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/contacts/${PLAYER_ID}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/Contact not unlocked/i);
+  });
+
+  it('returns player contact details on success', async () => {
+    mockGetPlayerById.mockReturnValue(MOCK_PLAYER);
+    mockGetEvents.mockReturnValue([
+      {
+        source: 'contract',
+        type: 'contact_unlocked',
+        contractAddress: 'contract',
+        payload: { scout: WALLET, player_id: PLAYER_ID, unlocked_at: 12345 },
+      },
+    ]);
+    const token = makeToken(WALLET);
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/contacts/${PLAYER_ID}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual({
+      playerId: PLAYER_ID,
+      wallet: MOCK_PLAYER.wallet,
+      email: `${PLAYER_ID}@example.com`,
+      phone: '+1-555-0199',
+    });
+  });
+});
+
