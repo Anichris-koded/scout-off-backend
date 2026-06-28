@@ -1,4 +1,14 @@
-import { SorobanRpc, Networks } from '@stellar/stellar-sdk';
+import {
+  SorobanRpc,
+  Networks,
+  Contract,
+  TransactionBuilder,
+  BASE_FEE,
+  Keypair,
+  Account,
+  Address,
+  scValToNative,
+} from '@stellar/stellar-sdk';
 import config from '../config';
 
 const server = new SorobanRpc.Server(config.sorobanRpcUrl);
@@ -46,8 +56,12 @@ export async function stellarHealth(): Promise<boolean> {
 }
 
 /**
- * Stub: check whether a scout has an active on-chain subscription.
- * Replace with a real Soroban `is_subscribed` contract call when ready.
+ * Check whether a scout has an active on-chain subscription by invoking
+ * `is_subscribed(scout)` on the Soroban contract via simulateTransaction.
+ *
+ * The contract function returns a plain bool; the expiry ledger is not
+ * exposed via this entry point, so expiresAt is '' for active and null
+ * for inactive/absent subscriptions.
  */
 export async function isSubscribed(
   scoutWallet: string,
@@ -55,8 +69,48 @@ export async function isSubscribed(
   if (!scoutWallet) {
     throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
   }
-  // TODO: invoke is_subscribed on the Soroban contract
-  return { active: false, expiresAt: null };
+
+  try {
+    const contract = new Contract(config.contractId);
+    // Use a random ephemeral keypair as the simulation source — no on-chain
+    // auth is required for this view-only call, and we never submit the tx.
+    const ephemeral = Keypair.random();
+    const sourceAccount = new Account(ephemeral.publicKey(), '0');
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: networkPassphrase(),
+    })
+      .addOperation(
+        contract.call('is_subscribed', Address.fromString(scoutWallet).toScVal()),
+      )
+      .setTimeout(30)
+      .build();
+
+    const simResult = await server.simulateTransaction(tx);
+
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new PaymentError(
+        `Contract simulation failed: ${simResult.error}`,
+        'NETWORK_ERROR',
+      );
+    }
+
+    const successSim = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const retval = successSim.result?.retval;
+    if (!retval) {
+      return { active: false, expiresAt: null };
+    }
+
+    const active = scValToNative(retval) as boolean;
+    return { active, expiresAt: active ? '' : null };
+  } catch (err) {
+    if (err instanceof PaymentError) throw err;
+    throw new PaymentError(
+      `RPC call failed: ${(err as Error).message}`,
+      'NETWORK_ERROR',
+    );
+  }
 }
 
 /**

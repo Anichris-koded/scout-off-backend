@@ -360,6 +360,25 @@ function buildPlayerWhereClause(opts: QueryPlayersOptions): { where: string; par
   return { where, params };
 }
 
+export function queryPlayers(opts: QueryPlayersOptions): PlayerRow[] {
+  const { where, params } = buildPlayerWhereClause(opts);
+  const limit = opts.limit ?? 20;
+  const offset = opts.offset ?? 0;
+  const sql = `SELECT * FROM players ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(...params, limit, offset) as PlayerRow[]
+  );
+}
+
+export function countPlayers(opts: Omit<QueryPlayersOptions, 'limit' | 'offset'>): number {
+  const { where, params } = buildPlayerWhereClause(opts);
+  const sql = `SELECT COUNT(*) as count FROM players ${where}`;
+  return timedQuery(sql, () => {
+    const row = getDb().prepare(sql).get(...params) as { count: number };
+    return row.count;
+  });
+}
+
 // ─── Idempotency key helpers ──────────────────────────────────────────────────
 
 export interface IdempotencyRecord {

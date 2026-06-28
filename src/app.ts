@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import config from './config';
 import authRoutes from './routes/auth';
 import playerRoutes from './routes/player';
@@ -16,6 +17,7 @@ import { stellarHealth } from './services/stellar';
 import { checkHealth } from './services/ipfs';
 import { API_PREFIX, API_V1_PREFIX } from './config';
 import { metricsMiddleware, createMetricsHandler } from './middleware/metrics';
+import { requestTimeout } from './middleware/timeout';
 import { indexerLedgerLag } from './services/indexer';
 import { getDb } from './db';
 
@@ -44,6 +46,8 @@ const corsOrigin =
     ? config.allowedOrigins
     : '*';
 app.use(cors({ origin: corsOrigin }));
+app.use(compression({ threshold: parseInt(process.env.COMPRESSION_THRESHOLD ?? '1024', 10) }));
+app.use(requestTimeout);
 app.use(correlationId);
 app.use(traceId);
 app.use(securityHeaders);
