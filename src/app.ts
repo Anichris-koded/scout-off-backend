@@ -19,7 +19,11 @@ import { indexerLedgerLag } from './services/indexer';
 
 const app = express();
 
-app.use(cors());
+const corsOrigin =
+  config.nodeEnv !== 'development' && config.allowedOrigins.length > 0
+    ? config.allowedOrigins
+    : '*';
+app.use(cors({ origin: corsOrigin }));
 app.use(correlationId);
 app.use(securityHeaders);
 app.use(responseTime);
@@ -43,10 +47,9 @@ app.get('/health', async (_req, res) => {
   res.json({ status: 'ok', healthStatus });
 });
 
-app.get('/ready', async (_req, res) => {
+async function checkReadiness(): Promise<Record<string, 'ok' | 'unavailable' | 'disabled'>> {
   const services: Record<string, 'ok' | 'unavailable' | 'disabled'> = {};
 
-  // Check IPFS/Pinata availability
   try {
     await checkHealth();
     services.ipfs = 'ok';
@@ -54,7 +57,6 @@ app.get('/ready', async (_req, res) => {
     services.ipfs = 'unavailable';
   }
 
-  // Check Stellar RPC if enabled
   if (config.stellarHealthCheckEnabled) {
     try {
       const stellarOk = await stellarHealth();
@@ -66,6 +68,11 @@ app.get('/ready', async (_req, res) => {
     services.stellar = 'disabled';
   }
 
+  return services;
+}
+
+app.get('/ready', async (_req, res) => {
+  const services = await checkReadiness();
   const allOk = Object.values(services).every(v => v === 'ok' || v === 'disabled');
   if (allOk) {
     res.json({ status: 'ok', services });
@@ -76,33 +83,11 @@ app.get('/ready', async (_req, res) => {
 
 // Kubernetes-style liveness and readiness probes
 app.get('/health/liveness', (_req, res) => {
-  // Liveness checks only that the process is up
   res.json({ status: 'ok' });
 });
 
 app.get('/health/readiness', async (_req, res) => {
-  const services: Record<string, 'ok' | 'unavailable' | 'disabled'> = {};
-
-  // Check IPFS/Pinata availability
-  try {
-    await checkHealth();
-    services.ipfs = 'ok';
-  } catch {
-    services.ipfs = 'unavailable';
-  }
-
-  // Check Stellar RPC if enabled
-  if (config.stellarHealthCheckEnabled) {
-    try {
-      const stellarOk = await stellarHealth();
-      services.stellar = stellarOk ? 'ok' : 'unavailable';
-    } catch {
-      services.stellar = 'unavailable';
-    }
-  } else {
-    services.stellar = 'disabled';
-  }
-
+  const services = await checkReadiness();
   const allOk = Object.values(services).every(v => v === 'ok' || v === 'disabled');
   if (allOk) {
     res.json({ status: 'ok', services });
