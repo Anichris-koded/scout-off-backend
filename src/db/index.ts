@@ -235,6 +235,5 @@ function buildPlayerWhereClause(opts: QueryPlayersOptions): { where: string; par
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const sql = `SELECT * FROM players ${where} ORDER BY created_at ASC`;
-  return timedQuery(sql, () => getDb().prepare(sql).all(...params) as PlayerRow[]);
+  return { where, params };
 }

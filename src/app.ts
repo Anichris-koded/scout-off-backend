@@ -14,7 +14,7 @@ import { responseTime } from './middleware/responseTime';
 import { stellarHealth } from './services/stellar';
 import { checkHealth } from './services/ipfs';
 import { API_PREFIX, API_V1_PREFIX } from './config';
-import { getMetrics } from './middleware/metrics';
+import { metricsMiddleware, createMetricsHandler } from './middleware/metrics';
 import { indexerLedgerLag } from './services/indexer';
 
 const app = express();
@@ -27,6 +27,8 @@ app.use(responseTime);
 // Returns 413 Payload Too Large if exceeded
 app.use(express.json({ limit: config.bodyLimit.json }));
 app.use(requestLogger);
+// Collect per-route request counts, latency, and error counts for /metrics.
+app.use(metricsMiddleware);
 
 app.get('/health', async (_req, res) => {
   const healthStatus: Record<string, 'ok' | 'error' | 'disabled'> = {};
@@ -109,29 +111,10 @@ app.get('/health/readiness', async (_req, res) => {
   }
 });
 
-app.get('/metrics', (_req, res) => {
-  const routes = getMetrics();
-  const lines: string[] = [];
-
-  lines.push('# HELP http_requests_total Total request count per route');
-  lines.push('# TYPE http_requests_total counter');
-  for (const [key, m] of Object.entries(routes)) {
-    lines.push(`http_requests_total{route="${key}"} ${m.count}`);
-  }
-
-  lines.push('# HELP http_request_duration_ms_total Accumulated request latency per route');
-  lines.push('# TYPE http_request_duration_ms_total counter');
-  for (const [key, m] of Object.entries(routes)) {
-    lines.push(`http_request_duration_ms_total{route="${key}"} ${m.totalLatencyMs}`);
-  }
-
-  lines.push('# HELP indexer_ledger_lag Ledgers behind the chain tip after the last poll');
-  lines.push('# TYPE indexer_ledger_lag gauge');
-  lines.push(`indexer_ledger_lag ${indexerLedgerLag}`);
-
-  res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-  res.send(lines.join('\n') + '\n');
-});
+// Prometheus scrape endpoint. Intentionally unauthenticated and not rate-limited
+// (standard scrape pattern): it is registered before the auth routes and is not
+// wrapped by any auth or rate-limit middleware.
+app.get('/metrics', createMetricsHandler(() => indexerLedgerLag));
 
 app.use('/auth', authRoutes);
 
