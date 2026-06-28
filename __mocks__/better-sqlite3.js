@@ -93,7 +93,11 @@ class Statement {
       let rows;
       let argIdx = 0;
       if (sql.includes('WHERE TYPE = ?')) {
-        rows = this._db._events.filter((e) => e.type === args[argIdx++]);
+        // NB: read the bound arg once, outside the filter callback. Evaluating
+        // `args[argIdx++]` per-element (the previous form) advanced argIdx for
+        // every row, so only the first row compared against the real value.
+        const wanted = args[argIdx++];
+        rows = this._db._events.filter((e) => e.type === wanted);
       } else {
         rows = [...this._db._events];
       }
