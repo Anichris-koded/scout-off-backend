@@ -14,7 +14,15 @@ jest.mock('../../src/services/ipfs', () => ({
 jest.mock('../../src/db', () => ({
   getEvents: jest.fn().mockReturnValue([]),
   queryPlayers: jest.fn().mockReturnValue([]),
+  countPlayers: jest.fn().mockReturnValue(0),
   getPlayerById: jest.fn().mockReturnValue(null),
+  getEventsCount: jest.fn().mockReturnValue(0),
+  insertPlayerProfileHistory: jest.fn(),
+  getPlayerProfileHistory: jest.fn().mockReturnValue([]),
+  getLatestSubscription: jest.fn().mockReturnValue(null),
+  insertSubscription: jest.fn().mockReturnValue(1),
+  renewSubscription: jest.fn(),
+  cancelSubscription: jest.fn(),
 }));
 
 jest.mock('../../src/services/indexer', () => ({

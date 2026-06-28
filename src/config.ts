@@ -82,6 +82,11 @@ const config = {
   backfillFromLedger: process.env.INDEXER_BACKFILL_FROM_LEDGER
     ? parseInt(process.env.INDEXER_BACKFILL_FROM_LEDGER, 10)
     : null,
+  /** Subscription grace period in hours after expiry during which access is still granted. */
+  subscriptionGracePeriodHours: parseInt(
+    process.env.SUBSCRIPTION_GRACE_PERIOD_HOURS ?? '24',
+    10,
+  ),
 };
 
 export default config;

@@ -18,6 +18,9 @@ jest.mock('../../src/services/stellar', () => ({
   submitContactPayment: jest.fn(),
   purchaseSubscription: jest.fn(),
   isSubscribed: jest.fn().mockResolvedValue({ active: false, expiresAt: null }),
+  renewSubscription: jest.fn(),
+  cancelSubscriptionOnChain: jest.fn(),
+  logTrialOffer: jest.fn(),
   PaymentError: class PaymentError extends Error {
     constructor(public message: string, public code: string) { super(message); }
   },
@@ -50,6 +53,9 @@ beforeEach(() => {
   mockGetEvents.mockReset();
   mockGetPlayerById.mockReset();
   mockIsSubscribed.mockReset().mockResolvedValue({ active: false, expiresAt: null });
+  // Ensure getLatestSubscription returns null by default
+  const { getLatestSubscription } = require('../../src/db');
+  (getLatestSubscription as jest.Mock).mockReset().mockReturnValue(null);
 });
 
 // ─── GET /api/scouts/:wallet/subscription ─────────────────────────────────────
@@ -77,7 +83,7 @@ describe('GET /api/scouts/:wallet/subscription', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.data).toEqual({ active: false, tier: null, expiresAt: null, remainingDays: 0 });
+    expect(res.body.data).toEqual({ active: false, tier: null, expiresAt: null, remainingDays: 0, gracePeriodActive: false });
   });
 
   it('returns active subscription with correct fields', async () => {
