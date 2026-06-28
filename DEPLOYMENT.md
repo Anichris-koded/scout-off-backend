@@ -17,6 +17,9 @@ Copy `.env.example` to `.env` and fill in all required values before starting th
 | `LOG_LEVEL` | — | `debug` / `info` / `warn` / `error` |
 | `STELLAR_HEALTH_CHECK_ENABLED` | — | Set `false` in staging to skip Stellar RPC check |
 | `TRUSTED_PROXY_COUNT` | — | Number of trusted reverse proxies (default: `1`) |
+| `ADMIN_WALLET` | — | Single admin wallet address (for backward compatibility) |
+| `ADMIN_WALLETS` | — | Comma-separated list of admin wallet addresses (e.g., `GABC...,GDEF...`) |
+| `ADMIN_THRESHOLD` | — | Number of admin signatures required for high-value operations (default: `1`) |
 
 ## Build & Start
 
@@ -64,6 +67,19 @@ Recommended metrics to track:
 - HTTP 5xx error rate
 - Event indexer lag (gap between latest on-chain event and last indexed event)
 - SQLite file size growth
+
+## Multi-Sig Admin Operations
+
+High-value admin operations (withdraw fees, pause/unpause contract) require M-of-N multi-signature approval:
+
+1. **Configure admin wallets**: Set `ADMIN_WALLETS` to a comma-separated list of Stellar addresses (e.g., `ADMIN_WALLETS=GABC123...,GDEF456...`)
+2. **Set threshold**: Configure `ADMIN_THRESHOLD` to the minimum number of admin signatures required (e.g., `ADMIN_THRESHOLD=2`)
+3. **Backward compatibility**: If `ADMIN_WALLETS` is not set, the system falls back to `ADMIN_WALLET` with threshold 1
+4. **Operations affected**:
+   - `POST /api/admin/fees` (withdraw fees)
+   - `POST /api/admin/contract/pause`
+   - `POST /api/admin/contract/unpause`
+5. **Single-signer attempts**: When threshold > 1, single-admin attempts return 403 with "High-value operation requires multiple admin signatures"
 
 ## Smoke Tests After Deployment
 

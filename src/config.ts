@@ -48,6 +48,8 @@ const config = {
   dbPath: process.env.DB_PATH ?? 'scout-off.db',
   stellarHealthCheckEnabled: process.env.STELLAR_HEALTH_CHECK !== 'false',
   adminWallet: process.env.ADMIN_WALLET ?? '',
+  adminWallets: (process.env.ADMIN_WALLETS ?? process.env.ADMIN_WALLET ?? '').split(',').map(w => w.trim()).filter(w => w.length > 0),
+  adminThreshold: parseInt(process.env.ADMIN_THRESHOLD ?? '1', 10),
   securityHeaders: {
     hsts: process.env.SECURITY_HSTS ?? 'max-age=31536000; includeSubDomains',
     xContentTypeOptions: process.env.SECURITY_X_CONTENT_TYPE_OPTIONS ?? 'nosniff',
@@ -63,16 +65,28 @@ const config = {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? '60000', 10),
     max: parseInt(process.env.RATE_LIMIT_MAX ?? (process.env.NODE_ENV === 'test' ? '1000' : '60'), 10),
   },
+  authRateLimit: {
+    windowMs: parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? '60000', 10),
+    max: parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? (process.env.NODE_ENV === 'test' ? '1000' : '5'), 10),
+  },
   bodyLimit: {
     // Maximum JSON payload size (default: 1MB)
     json: process.env.JSON_PAYLOAD_LIMIT ?? '1mb',
   },
+  allowedOrigins: process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+    : [],
   logLevel: (process.env.LOG_LEVEL ?? ENV_LOG_LEVEL[nodeEnv]) as LogLevel,
   showErrorDetails: nodeEnv === 'development' || nodeEnv === 'test',
   useMockServices: nodeEnv === 'development' || nodeEnv === 'test',
   backfillFromLedger: process.env.INDEXER_BACKFILL_FROM_LEDGER
     ? parseInt(process.env.INDEXER_BACKFILL_FROM_LEDGER, 10)
     : null,
+  /** Subscription grace period in hours after expiry during which access is still granted. */
+  subscriptionGracePeriodHours: parseInt(
+    process.env.SUBSCRIPTION_GRACE_PERIOD_HOURS ?? '24',
+    10,
+  ),
 };
 
 export default config;

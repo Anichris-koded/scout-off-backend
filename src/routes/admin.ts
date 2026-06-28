@@ -1,9 +1,5 @@
 import { Router } from 'express';
-
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, getAuditLog } from '../controllers/adminController';
-
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex } from '../controllers/adminController';
-
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex, getValidatorStatsEndpoint } from '../controllers/adminController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
 
@@ -162,5 +158,7 @@ router.post('/introspect', requireRole('admin'), introspectToken);
  * @auth Bearer (admin role required)
  */
 router.post('/indexer/reindex', requireRole('admin'), reindex);
+
+router.get('/validators/:wallet/stats', requireRole('admin'), getValidatorStatsEndpoint);
 
 export default router;

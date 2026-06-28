@@ -204,6 +204,46 @@ export async function purchaseSubscription(
   };
 }
 
+/**
+ * Stub: invoke renew_subscription(scout, tier, duration) on the Soroban contract.
+ * Extends the existing expiry by `duration` days.
+ */
+export async function renewSubscription(
+  scoutWallet: string,
+  tier: SubscriptionTier,
+  duration: number,
+  currentExpiresAt: number,
+): Promise<SubscriptionResult> {
+  if (!scoutWallet) {
+    throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
+  }
+  // Renewal extends from the current expiry (or now, if already expired)
+  const now = Math.floor(Date.now() / 1000);
+  const base = currentExpiresAt > now ? currentExpiresAt : now;
+  const expiresAt = base + duration * 86400;
+  // TODO: build and submit renew_subscription (or re-call subscribe) Soroban transaction
+  return {
+    transactionId: `stub-renew-txid-${Date.now()}`,
+    tier,
+    expiresAt,
+    status: 'active',
+  };
+}
+
+/**
+ * Stub: invoke cancel_subscription(scout) on the Soroban contract.
+ * Records the cancellation intent on-chain.
+ */
+export async function cancelSubscriptionOnChain(
+  scoutWallet: string,
+): Promise<{ transactionId: string }> {
+  if (!scoutWallet) {
+    throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
+  }
+  // TODO: build and submit cancel_subscription Soroban transaction
+  return { transactionId: `stub-cancel-txid-${Date.now()}` };
+}
+
 export interface UpdateProfileResult {
   transactionId: string;
   metadataUri: string;

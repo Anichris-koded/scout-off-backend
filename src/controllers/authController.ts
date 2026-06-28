@@ -55,10 +55,10 @@ export function postToken(req: Request, res: Response, next: NextFunction): void
       return;
     }
     const { transaction, role } = parsed.data;
-    // Seed admin: if the authenticated wallet matches ADMIN_WALLET, always issue admin role
+    // Seed admin: if the authenticated wallet matches ADMIN_WALLET or is in ADMIN_WALLETS, always issue admin role
     const candidate = extractAccount(transaction);
     const effectiveRole =
-      config.adminWallet && candidate === config.adminWallet ? 'admin' : role;
+      (config.adminWallet && candidate === config.adminWallet) || (config.adminWallets.includes(candidate)) ? 'admin' : role;
     const { token, account } = verifyAndIssueToken(transaction, effectiveRole);
     const expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
     res.json({ token, account, expiresAt });

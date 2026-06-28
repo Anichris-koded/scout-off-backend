@@ -7,7 +7,12 @@ const SECRET = process.env.JWT_SECRET ?? 'test-secret';
 jest.mock('../../src/db', () => ({
   getEvents: jest.fn().mockReturnValue([]),
   queryPlayers: jest.fn().mockReturnValue([]),
+  countPlayers: jest.fn().mockReturnValue(0),
   getPlayerById: jest.fn().mockReturnValue(null),
+  insertPlayerProfileHistory: jest.fn(),
+  getPlayerProfileHistory: jest.fn().mockReturnValue([]),
+  getLatestSubscription: jest.fn().mockReturnValue(null),
+  insertSubscription: jest.fn().mockReturnValue(1),
 }));
 
 jest.mock('../../src/services/indexer', () => ({
