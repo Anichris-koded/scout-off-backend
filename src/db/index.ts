@@ -69,6 +69,14 @@ export function initDb(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_pending_milestones_validator ON pending_milestones (validator_wallet);
     CREATE INDEX IF NOT EXISTS idx_pending_milestones_player ON pending_milestones (player_id);
+    CREATE TABLE IF NOT EXISTS contact_unlocks (
+      scout_wallet TEXT    NOT NULL,
+      player_id    TEXT    NOT NULL,
+      tx_hash      TEXT    NOT NULL,
+      unlocked_at  INTEGER NOT NULL,
+      PRIMARY KEY (scout_wallet, player_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_contact_unlocks_scout ON contact_unlocks (scout_wallet);
   `);
   // Run SQL migrations (player_profile_history, idempotency_keys, etc.)
   runMigrations(_db);
@@ -437,4 +445,74 @@ export function purgeExpiredIdempotencyKeys(): number {
     const info = getDb().prepare(sql).run(Date.now());
     return info.changes;
   });
+}
+
+// ─── Subscription helpers ─────────────────────────────────────────────────────
+
+export interface SubscriptionRow {
+  id: number;
+  scout_wallet: string;
+  tier: string;
+  expires_at: number;
+  cancelled_at: number | null;
+  created_at: number;
+}
+
+export function getLatestSubscription(scoutWallet: string): SubscriptionRow | null {
+  const sql = `SELECT * FROM subscriptions WHERE scout_wallet = ? AND cancelled_at IS NULL ORDER BY expires_at DESC LIMIT 1`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(scoutWallet) as SubscriptionRow | undefined) ?? null
+  );
+}
+
+export function insertSubscription(p: {
+  scout_wallet: string;
+  tier: string;
+  expires_at: number;
+  created_at: number;
+}): number {
+  const sql = `INSERT INTO subscriptions (scout_wallet, tier, expires_at, created_at) VALUES (?, ?, ?, ?)`;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(p.scout_wallet, p.tier, p.expires_at, p.created_at);
+    return info.lastInsertRowid as number;
+  });
+}
+
+export function dbRenewSubscription(p: { id: number; tier: string; expires_at: number }): void {
+  const sql = `UPDATE subscriptions SET tier = ?, expires_at = ? WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(p.tier, p.expires_at, p.id));
+}
+
+export function dbCancelSubscription(p: { id: number; cancelled_at: number }): void {
+  const sql = `UPDATE subscriptions SET cancelled_at = ? WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(p.cancelled_at, p.id));
+}
+
+// ─── Contact unlock helpers ───────────────────────────────────────────────────
+
+export interface ContactUnlockRow {
+  scout_wallet: string;
+  player_id: string;
+  tx_hash: string;
+  unlocked_at: number;
+}
+
+export function insertContactUnlock(p: {
+  scout_wallet: string;
+  player_id: string;
+  tx_hash: string;
+  unlocked_at: number;
+}): void {
+  const sql = `INSERT INTO contact_unlocks (scout_wallet, player_id, tx_hash, unlocked_at) VALUES (?, ?, ?, ?) ON CONFLICT(scout_wallet, player_id) DO NOTHING`;
+  timedQuery(sql, () => getDb().prepare(sql).run(p.scout_wallet, p.player_id, p.tx_hash, p.unlocked_at));
+}
+
+export function getContactUnlocksByScout(scoutWallet: string): ContactUnlockRow[] {
+  const sql = `SELECT * FROM contact_unlocks WHERE scout_wallet = ? ORDER BY unlocked_at DESC`;
+  return timedQuery(sql, () => getDb().prepare(sql).all(scoutWallet) as ContactUnlockRow[]);
+}
+
+export function hasContactUnlock(scoutWallet: string, playerId: string): boolean {
+  const sql = `SELECT 1 FROM contact_unlocks WHERE scout_wallet = ? AND player_id = ? LIMIT 1`;
+  return timedQuery(sql, () => getDb().prepare(sql).get(scoutWallet, playerId) !== undefined);
 }
