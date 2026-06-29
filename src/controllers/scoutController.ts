@@ -20,6 +20,14 @@ export const trialOfferSchema = z.object({
     .refine(isValidEvidenceUri, 'detailsUri must be a valid IPFS (ipfs://) or HTTPS URI'),
 });
 
+/**
+ * Body schema for POST /scouts/:wallet/contacts/:playerId/unlock.
+ * Currently the unlock operation only uses URL params (wallet, playerId),
+ * so the body is intentionally empty. Defining it explicitly ensures
+ * unexpected fields are stripped and the route is ready for future body fields.
+ */
+export const unlockContactSchema = z.object({}).strict();
+
 const subscribeSchema = z.object({
   tier: z.enum(['basic', 'premium']),
   duration: z.number().int().min(1).max(365),

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getSubscription, getUnlockedContacts, getContactDetails, unlockContact, getPaymentHistory, subscribe, cancelSubscription, submitTrialOffer, trialOfferSchema } from '../controllers/scoutController';
+import { getSubscription, getUnlockedContacts, getContactDetails, unlockContact, getPaymentHistory, subscribe, cancelSubscription, submitTrialOffer, trialOfferSchema, unlockContactSchema } from '../controllers/scoutController';
 import { getScoutRecommendations } from '../controllers/scoutRecommendationsController';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
@@ -81,6 +81,7 @@ router.post(
   "/:wallet/contacts/:playerId/unlock",
   requireRole("scout"),
   walletRateLimit(),
+  validateBody(unlockContactSchema),
   unlockContact,
 );
 
