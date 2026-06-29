@@ -73,7 +73,7 @@ function onAfterInsert(_eventId: string): void { /* hook */ }
 export async function indexEvents(): Promise<void> {
   const db = getDb();
   const insert = db.prepare(
-    'INSERT OR IGNORE INTO events (type, ledger, tx_hash, payload) VALUES (?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO events (type, ledger, tx_hash, payload, created_at) VALUES (?, ?, ?, ?, ?)'
   );
 
   const fromLedger = getLastLedger();
@@ -99,8 +99,12 @@ export async function indexEvents(): Promise<void> {
       const type = raw.topic[0]?.value() as string;
       const payload = normalizePayload((raw.value?.value() as unknown as Record<string, unknown>) ?? {});
       const eventId = normalizeEventId(config.contractId, raw.ledger, raw.txHash);
+      // Use ledger close time when available (seconds → ms), otherwise index time.
+      const createdAt = raw.ledgerClosedAt
+        ? new Date(raw.ledgerClosedAt).getTime()
+        : Date.now();
       onBeforeInsert(eventId);
-      insert.run(type, raw.ledger, raw.txHash, JSON.stringify(payload));
+      insert.run(type, raw.ledger, raw.txHash, JSON.stringify(payload), createdAt);
       onAfterInsert(eventId);
 
       if (type === 'milestone_approved') {

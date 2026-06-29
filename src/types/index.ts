@@ -176,4 +176,5 @@ export interface EventRecord {
   type: ContractEventType;
   payload: Record<string, unknown>;
   contractAddress: string;
+  created_at?: number | null;
 }

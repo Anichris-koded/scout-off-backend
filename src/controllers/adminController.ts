@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
-import { getEvents, getLastLedger, setLastLedger, getValidatorStats } from '../db';
-import { ApiResponse, EventRecord } from '../types';
+import { getEvents, getEventsCount, getLastLedger, setLastLedger, getValidatorStats } from '../db';
+import { ApiResponse, EventRecord, ContractEventType } from '../types';
 import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, unpauseContractOnChain, ContractActionError } from '../services/stellar';
 import config from '../config';
@@ -101,10 +101,8 @@ export async function getAllEvents(req: Request, res: Response, next: NextFuncti
 
     const eventTypeFilter = eventType as ContractEventType | undefined;
     let events = getEvents(eventTypeFilter, { limit, offset }) as unknown as EventRecord[];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (startDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) >= startDate!);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (endDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) <= endDate!);
+    if (startDate) events = events.filter((e) => new Date(e.created_at ?? 0) >= startDate!);
+    if (endDate) events = events.filter((e) => new Date(e.created_at ?? 0) <= endDate!);
 
     const total = getEventsCount(eventTypeFilter);
     res.json({ success: true, data: events, total, limit, offset });
