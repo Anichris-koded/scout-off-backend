@@ -1,5 +1,38 @@
 import request from 'supertest';
-import app from '../../src/index';
+import jwt from 'jsonwebtoken';
+import { logger } from '../../src/utils/logger';
+import app from '../../src/app';
+import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
+import { auditStore } from '../../src/utils/audit';
+
+jest.mock('../../src/services/ipfs', () => ({
+  pinJson: jest.fn().mockResolvedValue('QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64'),
+  checkHealth: jest.fn().mockResolvedValue(undefined),
+  gatewayUrl: jest.fn((cid) => `https://gateway.pinata.cloud/ipfs/${cid}`),
+}));
+
+jest.mock('../../src/db', () => ({
+  getEvents: jest.fn().mockReturnValue([]),
+  queryPlayers: jest.fn().mockReturnValue([]),
+  countPlayers: jest.fn().mockReturnValue(0),
+  getPlayerById: jest.fn().mockReturnValue(null),
+  getEventsCount: jest.fn().mockReturnValue(0),
+  insertPlayerProfileHistory: jest.fn(),
+  getPlayerProfileHistory: jest.fn().mockReturnValue([]),
+  getLatestSubscription: jest.fn().mockReturnValue(null),
+  insertSubscription: jest.fn().mockReturnValue(1),
+  renewSubscription: jest.fn(),
+  cancelSubscription: jest.fn(),
+}));
+
+jest.mock('../../src/services/indexer', () => ({
+  indexEvents: jest.fn(),
+  normalizeEventId: jest.fn(),
+}));
+
+jest.mock('../../src/services/webhooks', () => ({
+  dispatchEventWebhook: jest.fn().mockResolvedValue(undefined),
+}));
 
 describe('GET /health', () => {
   it('returns 200 ok', async () => {
@@ -34,9 +67,75 @@ describe('GET /api/players', () => {
   });
 });
 
+describe('POST /api/players/register', () => {
+  const validPlayer = {
+    wallet: 'G'.repeat(56),
+    position: 'striker',
+    region: 'europe',
+    metadataUri: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+  };
+
+  it('returns 401 when no token is provided', async () => {
+    const res = await request(app)
+      .post('/api/players/register')
+      .send(validPlayer);
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('returns 403 when authenticated as non-player role', async () => {
+    const token = await getValidatorToken();
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send(validPlayer);
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('rejects invalid metadataUri values with 400', async () => {
+    const token = await getPlayerToken();
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ...validPlayer, metadataUri: 'invalid-cid' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('accepts registration payloads with valid metadataUri', async () => {
+    const token = await getPlayerToken();
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send(validPlayer);
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.metadataUri).toBe(validPlayer.metadataUri);
+  });
+});
+
+describe('POST /api/validators/milestone', () => {
+  it('rejects invalid milestone submissions and logs a correlation ID', async () => {
+    const token = await getValidatorToken();
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    const res = await request(app)
+      .post('/api/validators/milestone')
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-correlation-id', 'test-corr-id')
+      .send({ playerId: 'player-1', milestoneType: 'invalid_type', evidenceUri: 'ipfs://QmTest' });
+
+    expect(res.status).toBe(400);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('correlationId=test-corr-id'));
+    warnSpy.mockRestore();
+  });
+});
+
 describe('GET /auth/challenge', () => {
   it('returns challenge XDR for a valid Stellar account', async () => {
-    const { Keypair } = await import('@stellar/stellar-sdk');
     const account = Keypair.random().publicKey();
     const res = await request(app).get(`/auth/challenge?account=${account}`);
     expect(res.status).toBe(200);
@@ -58,7 +157,6 @@ describe('GET /auth/challenge', () => {
 
 describe('POST /auth/token', () => {
   it('returns JWT after client signs the challenge', async () => {
-    const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
     const clientKeypair = Keypair.random();
     const challengeRes = await request(app).get(
       `/auth/challenge?account=${clientKeypair.publicKey()}`
@@ -77,7 +175,6 @@ describe('POST /auth/token', () => {
   });
 
   it('returns JWT with validator role when role is specified', async () => {
-    const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
     const clientKeypair = Keypair.random();
     const challengeRes = await request(app).get(
       `/auth/challenge?account=${clientKeypair.publicKey()}`
@@ -95,7 +192,6 @@ describe('POST /auth/token', () => {
   });
 
   it('returns 401 for unsigned challenge', async () => {
-    const { Keypair } = await import('@stellar/stellar-sdk');
     const clientKeypair = Keypair.random();
     const challengeRes = await request(app).get(
       `/auth/challenge?account=${clientKeypair.publicKey()}`
@@ -116,7 +212,6 @@ describe('POST /auth/token', () => {
 });
 
 async function getValidatorToken(): Promise<string> {
-  const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
   const kp = Keypair.random();
   const challengeRes = await request(app).get(`/auth/challenge?account=${kp.publicKey()}`);
   const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
@@ -128,7 +223,6 @@ async function getValidatorToken(): Promise<string> {
 }
 
 async function getPlayerToken(): Promise<string> {
-  const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
   const kp = Keypair.random();
   const challengeRes = await request(app).get(`/auth/challenge?account=${kp.publicKey()}`);
   const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
@@ -140,7 +234,6 @@ async function getPlayerToken(): Promise<string> {
 }
 
 async function getAdminToken(): Promise<string> {
-  const { Keypair, Transaction, Networks } = await import('@stellar/stellar-sdk');
   const kp = Keypair.random();
   const challengeRes = await request(app).get(`/auth/challenge?account=${kp.publicKey()}`);
   const tx = new Transaction(challengeRes.body.challenge, Networks.TESTNET);
@@ -273,5 +366,37 @@ describe('POST /api/validators/milestone', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ playerId: 'player-1', milestoneType: 'identity' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/players — search audit logging', () => {
+  beforeEach(() => {
+    auditStore.length = 0;
+  });
+
+  it('records an anonymous player_search entry when no auth token is provided', async () => {
+    await request(app).get('/api/players?region=europe');
+    const entry = auditStore.find((e) => e.eventType === 'player_search');
+    expect(entry).toBeDefined();
+    expect(entry!.actorWallet).toBe('anonymous');
+    expect(entry!.eventType).toBe('player_search');
+  });
+
+  it('records a player_search entry linked to the wallet when authenticated', async () => {
+    const scoutWallet = 'GSCOUTABC123XYZWALLET000000000000000000000000000000000000';
+    const token = jwt.sign({ sub: scoutWallet, role: 'scout' }, 'test-secret', { expiresIn: '1h' });
+    await request(app)
+      .get('/api/players?position=striker')
+      .set('Authorization', `Bearer ${token}`);
+    const entry = auditStore.find((e) => e.eventType === 'player_search');
+    expect(entry).toBeDefined();
+    expect(entry!.actorWallet).toBe(scoutWallet);
+  });
+
+  it('still returns 200 and results regardless of auth state', async () => {
+    const res = await request(app).get('/api/players');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
   });
 });

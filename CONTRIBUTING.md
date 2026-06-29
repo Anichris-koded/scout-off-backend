@@ -1,0 +1,390 @@
+# Contributing to ScoutOff Backend
+
+Welcome! This guide covers contribution workflows, code standards, and critical security practices including dependency management.
+
+## Table of Contents
+
+- [Getting Started](#getting-started)
+- [Contribution Workflow](#contribution-workflow)
+- [Code Quality Standards](#code-quality-standards)
+- [Security & Dependency Review](#security--dependency-review)
+- [Filing Issues](#filing-backend-issues)
+- [Getting Help](#getting-help)
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js ≥ 18
+- npm ≥ 9
+- Git
+
+### Setup
+
+1. **Fork and Clone**
+   ```bash
+   git clone https://github.com/scout-off/scout-off-backend.git
+   cd scout-off-backend
+   npm install
+   ```
+
+2. **Create a Feature Branch**
+   ```bash
+   git checkout -b add-your-feature-description
+   ```
+
+3. **Pre-Contribution Checks**
+   - All tests pass: `npm run test`
+   - Linting passes: `npm run lint`
+   - No security vulnerabilities: `npm audit`
+   - Environment is set up: `cp .env.example .env`
+
+## Contribution Workflow
+
+### 1. Claim an Issue
+
+Comment on the GitHub issue to indicate you're working on it. Maintainers will assign it to you.
+
+### 2. Make Changes and Test
+
+```bash
+npm run dev           # Start dev server with hot-reload
+npm run test          # Run full test suite
+npm run lint          # Check code style
+npm audit             # Check for security vulnerabilities
+```
+
+### 3. Commit with Clear Messages
+
+Use conventional commit format:
+
+```bash
+git commit -m "feat: add player region filter
+
+- Add region parameter to /api/players endpoint
+- Update Soroban contract to support region queries
+- Add integration tests for region filter
+
+Fixes #123"
+```
+
+**Commit types:**
+- `feat:` – New feature
+- `fix:` – Bug fix
+- `docs:` – Documentation only
+- `chore:` – Dependency update, build config
+- `refactor:` – Code restructuring
+- `perf:` – Performance improvement
+- `test:` – Test addition or fix
+- `security:` – Security hardening
+
+### 4. Push and Open a Pull Request
+
+```bash
+git push origin add-your-feature-description
+```
+
+Reference the issue in the PR description:
+```
+## Summary
+Brief description of what this PR does.
+
+## Issue
+Fixes #123
+
+## Testing
+- [ ] All tests pass
+- [ ] npm audit passes
+- [ ] Manual testing completed
+
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Documentation update
+- [ ] Dependency update
+- [ ] Security fix
+```
+
+### 5. Review and Merge
+
+- Respond to reviewer feedback in new commits (don't force-push)
+- Ensure CI/CD checks pass
+- Once approved, maintainers merge to `main`
+
+## Code Quality Standards
+
+### Required Checks
+
+- **Tests**: New features must include unit or integration tests
+  ```bash
+  npm run test
+  ```
+
+- **Linting**: No linting warnings
+  ```bash
+  npm run lint
+  ```
+
+- **Types**: Use strict TypeScript; avoid `any` types where possible
+
+- **Documentation**: Update README if your changes affect user-facing behavior
+
+- **Git History**: Use atomic commits with meaningful messages
+
+### Coverage Goals
+
+- Target ≥ 80% code coverage for new code
+- Focus on critical paths: auth, payments, data validation
+- See `tests/` directory for examples
+
+### Naming Conventions
+
+- **Files**: `camelCase.ts` for source, `camelCase.test.ts` for tests
+- **Functions**: `camelCase()` for functions, `PascalCase` for classes/types
+- **Constants**: `UPPER_SNAKE_CASE` for compile-time constants
+- **Directories**: `lowercase` for module directories
+
+## Security & Dependency Review
+
+**All contributors must perform regular security audits.** This is a critical responsibility when working with blockchain payments and user data.
+
+### Regular Dependency Audits
+
+Run `npm audit` **before every commit** and **before every PR submission**:
+
+```bash
+npm audit
+```
+
+**Output interpretation:**
+- ✅ **No vulnerabilities**: Safe to proceed
+- ⚠️ **Low severity**: Document in PR; fix in next sprint if no workaround exists
+- 🔴 **Moderate/High/Critical**: **Must fix before merging**
+  - Moderate: Fix unless infeasible; document trade-offs
+  - High/Critical: Fix immediately or block the PR
+
+### Dependency Update Process
+
+1. **Check for Updates**
+   ```bash
+   npm outdated
+   ```
+
+2. **Test Before Updating**
+   ```bash
+   npm update <package-name>
+   npm run test && npm run lint && npm audit
+   ```
+
+3. **Review Breaking Changes**
+   - Check the package's CHANGELOG
+   - Test all affected code paths
+   - Update types if needed
+
+4. **Commit Dependency Updates**
+   ```bash
+   git commit -m "chore: update @stellar/stellar-sdk to 12.2.0
+
+   - Update from 12.1.0 to 12.2.0
+   - Fixes vulnerability in RPC error handling
+   - All tests pass; no breaking changes
+
+   Fixes #456"
+   ```
+
+### Critical Dependency Categories
+
+The following dependencies require extra scrutiny during updates due to their security-sensitive roles:
+
+| Package | Role | Why Critical |
+|---------|------|-------------|
+| `express` | Web framework | Handles auth, request validation, rate limiting |
+| `@stellar/stellar-sdk` | Blockchain integration | Direct interaction with Stellar network, key material |
+| `jsonwebtoken` | JWT handling | Authentication tokens, session management |
+| `better-sqlite3` | Database | Stores user profiles, transaction records |
+| `axios` / `node-fetch` | HTTP client | External API calls to Pinata/IPFS, Stellar Horizon |
+| `dotenv` | Environment config | Loads sensitive secrets (JWT_SECRET, PINATA_KEY) |
+
+**When updating these, always:**
+- Run full test suite: `npm run test`
+- Run security audit: `npm audit`
+- Test integration points manually
+- Verify no secrets are logged
+
+### Supply Chain Security
+
+- ✅ Use `npm ci` in CI/CD (reproducible installs)
+- ✅ Lock `package-lock.json` in version control
+- ✅ Audit transitive dependencies: `npm audit --depth=10`
+- ✅ Review unknown publishers: `npm info <package> | grep -A5 contributors`
+- ✅ Avoid deprecated packages in `npm audit`
+- ❌ Do NOT use `npm install --force` or `--legacy-peer-deps` without justification
+
+### Reviewing Deprecated Dependencies
+
+When you encounter a deprecated package or see warnings during audit:
+
+1. **Identify Deprecation Reason**
+   ```bash
+   npm info <package-name>
+   ```
+   Check for:
+   - `deprecated` field (shows deprecation message)
+   - No activity in past 12+ months
+   - Known security vulnerabilities
+   - Better alternatives available
+
+2. **Evaluate Replacement Options**
+   - Research recommended alternatives on npm
+   - Check GitHub for active maintenance (recent commits, open issues)
+   - Verify API compatibility with current usage
+   - Consider migration effort vs. risk
+
+3. **Migration Strategy**
+   - Create a new issue to track the deprecation
+   - Plan migration in a feature branch (e.g., `chore/replace-deprecated-package`)
+   - Update one deprecated package at a time to isolate issues
+   - Run full test suite after each replacement
+   - Document any API changes in commit message
+
+4. **Examples of Recently Handled Deprecations**
+   | Old Package | Reason | Replacement | Status |
+   |-------------|--------|-------------|--------|
+   | `node-fetch@2` | Deprecated in favor of native fetch | native `fetch` or `axios` | Migration in progress |
+   | Specific older packages | No longer maintained | Actively maintained fork | Queued for review |
+
+5. **Security Review Checklist for Deprecated Packages**
+   - [ ] Check CVE databases (NVD, Snyk, npm audit)
+   - [ ] Review open security issues in GitHub
+   - [ ] Verify no direct secrets/tokens in deprecation warnings
+   - [ ] Document any interim workarounds
+   - [ ] Set migration deadline (if package has known exploits)
+
+### Reporting Security Issues
+
+**Do NOT open a public GitHub issue for security vulnerabilities.**
+
+Instead:
+1. Email maintainers privately
+2. Include proof of concept (if safe to share)
+3. Allow 7 days for maintainers to respond before public disclosure
+
+## Filing Backend Issues
+
+We track ~125 active issues. Use these guidelines to help us prioritize efficiently.
+
+### Issue Categories
+
+| Category | Description | Examples |
+|----------|-------------|----------|
+| `bug` | Unintended behavior or crashes | IPFS timeout; SEP-10 auth fails |
+| `feature` | New capability or enhancement | Add region filter; support trial offer |
+| `performance` | Optimization or speed improvements | Cache milestone queries; reduce latency |
+| `documentation` | README, API docs, or code comments | Clarify error codes; add SDK examples |
+| `refactor` | Code restructuring without behavior changes | Consolidate validation; reduce middleware |
+| `infra` | Deployment, CI/CD, DevOps | GitHub Actions; database migration tools |
+| `security` | Vulnerability fixes or hardening | JSON validation; rate limit on auth |
+| `test` | Test coverage or reliability | Add contract edge cases; improve isolation |
+
+### Priority Levels
+
+| Priority | Severity | Timeline | Example |
+|----------|----------|----------|---------|
+| **P0** | Critical | Fix immediately | Contract init fails; data corruption |
+| **P1** | High | Fix within sprint | Milestone broken; payment hangs |
+| **P2** | Medium | Schedule next sprint | Scout search slow; stale validator list |
+| **P3** | Low | Plan in backlog | Error message clarity; refactor unused module |
+
+### How to File a High-Quality Issue
+
+1. **Search Existing Issues First**  
+   Avoid duplicates: https://github.com/scout-off/scout-off-backend/issues
+
+2. **Use a Clear Title**  
+   ✅ *"Auth token expires before subscription ends"*  
+   ❌ *"Bug with tokens"*
+
+3. **Provide Steps to Reproduce** (for bugs)
+   ```
+   1. Create a scout account
+   2. Purchase a 30-day subscription via /api/scouts/subscribe
+   3. Wait 25 days
+   4. Call /api/scouts/:wallet/subscription
+   
+   Expected: subscription still active
+   Actual: returns 401 NotSubscribed
+   ```
+
+4. **Include Environment Context**
+   ```
+   - OS: macOS 14.1 / Linux 24.04 / Windows 11
+   - Node: v18.16.0
+   - npm: 9.6.4
+   - Key package versions: npm list express @stellar/stellar-sdk
+   - Network: testnet / mainnet / local
+   ```
+
+5. **Add Labels**
+   - Select category: `bug`, `feature`, `security`, etc.
+   - Estimate priority: `P0`, `P1`, `P2`, `P3`
+   - Maintainers will confirm priority
+
+6. **Link Related Issues**
+   ```
+   Fixes #123
+   Related to #456
+   ```
+
+### Issue Template
+
+```markdown
+## Summary
+One-line description.
+
+## Category
+[ ] Bug [ ] Feature [ ] Performance [ ] Documentation
+[ ] Refactor [ ] Infra [ ] Security [ ] Test
+
+## Priority (Estimated)
+[ ] P0 – Critical [ ] P1 – High [ ] P2 – Medium [ ] P3 – Low
+
+## Environment
+- OS: [macOS/Linux/Windows]
+- Node: [version]
+- npm: [version]
+- Network: [testnet/mainnet/local]
+
+## Description
+Detailed explanation of the issue or proposal.
+
+## Steps (for bugs)
+1.
+2.
+3.
+
+## Expected vs. Actual (for bugs)
+- Expected: …
+- Actual: …
+
+## Proposed Solution (for features)
+How would this be implemented?
+
+## Related Issues
+Fixes #XXX / Related to #YYY
+```
+
+## Getting Help
+
+- **Questions about an issue?** Comment on the GitHub issue
+- **Need design feedback?** Open a draft PR early
+- **Stuck debugging?** Reach out on [Stellar Discord](https://discord.gg/stellar)
+- **Security concerns?** Email maintainers privately
+- **Contributing via Drips?** Visit [Drips contributor portal](https://drips.network)
+
+## Acknowledgments
+
+ScoutOff is part of the Drips funding wave program. Funded contributors receive support through the Drips platform. Visit [drips.network](https://drips.network) to learn about opportunities and register your interest.
+
+---
+
+**Thank you for contributing to ScoutOff!** Your work helps connect talented footballers with opportunities. 🙌
