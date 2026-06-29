@@ -20,6 +20,21 @@ class Statement {
     } else if (sql.startsWith('INSERT INTO INDEXER_STATE') || sql.startsWith('INSERT OR REPLACE INTO INDEXER_STATE')) {
       const [key, value] = args;
       this._db._state.set(key, value);
+    } else if (sql.includes('INDEXER_STATE') && sql.includes('ON CONFLICT')) {
+      const [key, value] = args;
+      this._db._state.set(key, value);
+    } else if (sql.startsWith('INSERT OR IGNORE INTO TRIAL_OFFERS')) {
+      const [scout_wallet, player_id, details_uri, tx_hash, created_at] = args;
+      if (!this._db._trialOffers.find((o) => o.tx_hash === tx_hash)) {
+        this._db._trialOffers.push({
+          id: this._db._trialOffers.length + 1,
+          scout_wallet,
+          player_id,
+          details_uri,
+          tx_hash,
+          created_at,
+        });
+      }
     }
     return { changes: 1, lastInsertRowid: 0 };
   }
@@ -36,6 +51,12 @@ class Statement {
 
   all(...args) {
     const sql = this._sql.toUpperCase();
+    if (sql.includes('FROM TRIAL_OFFERS')) {
+      const wallet = args[0];
+      return this._db._trialOffers
+        .filter((o) => o.scout_wallet === wallet)
+        .sort((a, b) => b.created_at - a.created_at);
+    }
     if (sql.includes('FROM EVENTS')) {
       if (sql.includes('WHERE TYPE = ?')) {
         return this._db._events.filter((e) => e.type === args[0]);
@@ -50,6 +71,7 @@ class Database {
   constructor(_path) {
     this._events = [];
     this._state = new Map();
+    this._trialOffers = [];
   }
 
   exec(_sql) {

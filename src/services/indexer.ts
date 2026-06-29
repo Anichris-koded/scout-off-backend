@@ -50,6 +50,14 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS trial_offers (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    scout_wallet TEXT    NOT NULL,
+    player_id    TEXT    NOT NULL,
+    details_uri  TEXT    NOT NULL,
+    tx_hash      TEXT    NOT NULL UNIQUE,
+    created_at   INTEGER NOT NULL
+  );
 `);
 
 function getLastLedger(): number {
@@ -101,7 +109,36 @@ export async function indexEvents(): Promise<void> {
   setLastLedger(latest.ledger + 1);
 }
 
-// ─── Query helpers ────────────────────────────────────────────────────────────
+// ─── Trial offers ────────────────────────────────────────────────────────────
+
+export interface TrialOfferRow {
+  id: number;
+  scout_wallet: string;
+  player_id: string;
+  details_uri: string;
+  tx_hash: string;
+  created_at: number;
+}
+
+const insertTrialOfferStmt = db.prepare(
+  'INSERT OR IGNORE INTO trial_offers (scout_wallet, player_id, details_uri, tx_hash, created_at) VALUES (?, ?, ?, ?, ?)'
+);
+
+export function insertTrialOffer(
+  scoutWallet: string,
+  playerId: string,
+  detailsUri: string,
+  txHash: string,
+  createdAt: number,
+): void {
+  insertTrialOfferStmt.run(scoutWallet, playerId, detailsUri, txHash, createdAt);
+}
+
+export function getTrialOffers(scoutWallet: string): TrialOfferRow[] {
+  return db
+    .prepare('SELECT * FROM trial_offers WHERE scout_wallet = ? ORDER BY created_at DESC')
+    .all(scoutWallet) as TrialOfferRow[];
+}
 
 export function getEvents(type?: ContractEventType): EventRecord[] {
   const rows = type
