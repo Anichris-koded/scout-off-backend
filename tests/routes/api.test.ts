@@ -117,6 +117,52 @@ describe('POST /api/players/register', () => {
   });
 });
 
+describe('GET /api/players/:playerId route validation', () => {
+  it('accepts a valid player ID and returns 404 when the player does not exist', async () => {
+    const res = await request(app).get('/api/players/player_123');
+    expect(res.status).toBe(404);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('rejects an empty player ID with 400', async () => {
+    const res = await request(app).get('/api/players/%20');
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('playerId may only contain letters, numbers, underscores, and hyphens');
+  });
+
+  it('rejects an overlong player ID with 400', async () => {
+    const longId = 'a'.repeat(129);
+    const res = await request(app).get(`/api/players/${longId}`);
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('playerId cannot exceed 128 characters');
+  });
+
+  it('rejects a player ID with invalid characters', async () => {
+    const res = await request(app).get('/api/players/player%20with%20spaces');
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('playerId may only contain letters, numbers, underscores, and hyphens');
+  });
+});
+
+describe('GET /api/players/:playerId/milestones route validation', () => {
+  it('accepts a valid player ID and returns 200 with array data', async () => {
+    const res = await request(app).get('/api/players/player_123/milestones');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('rejects an invalid player ID with 400', async () => {
+    const res = await request(app).get('/api/players/player#123/milestones');
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('playerId may only contain letters, numbers, underscores, and hyphens');
+  });
+});
+
 describe('POST /api/validators/milestone', () => {
   it('rejects invalid milestone submissions and logs a correlation ID', async () => {
     const token = await getValidatorToken();

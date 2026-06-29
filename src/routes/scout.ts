@@ -7,6 +7,17 @@ import { walletRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
 
+const walletParams = z.object({
+  wallet: z.string().refine(isValidStellarAddress, {
+    message: 'Invalid Stellar address',
+  }),
+});
+
+const walletAndPlayerParams = z.object({
+  wallet: walletParams.shape.wallet,
+  playerId: playerIdSchema,
+});
+
 /**
  * GET /api/scouts/:wallet/subscription
  *
