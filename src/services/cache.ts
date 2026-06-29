@@ -1,31 +1,49 @@
 /**
- * Search cache invalidation stubs.
- *
- * TODO (Redis): Replace the in-memory Set with a Redis client.
- *   import { createClient } from 'redis';
- *   const redis = createClient({ url: process.env.REDIS_URL });
- *   await redis.del(key);
+ * In-memory cache with TTL support.
  *
  * Cache key conventions:
- *   players:list          – all paginated player search results
+ *   players:list:<hash>   – paginated player search results (keyed by filter params)
  *   players:<playerId>    – single player profile
  *   milestones:<playerId> – milestone list for a player
+ *
+ * TODO (Redis): Replace Map with a Redis client for distributed deployments.
  */
 
-const cache = new Map<string, unknown>();
+import config from '../config';
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+const cache = new Map<string, CacheEntry<unknown>>();
+
+export function cacheGet<T>(key: string): T | undefined {
+  const entry = cache.get(key) as CacheEntry<T> | undefined;
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+export function cacheSet<T>(key: string, value: T, ttlMs = config.playerCacheTtlMs): void {
+  cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
 
 export function invalidatePlayerCache(playerId?: string): void {
-  // TODO (Redis): await redis.del('players:list')
-  cache.delete('players:list');
+  for (const key of cache.keys()) {
+    if (key.startsWith('players:list:')) {
+      cache.delete(key);
+    }
+  }
   if (playerId) {
-    // TODO (Redis): await redis.del(`players:${playerId}`)
     cache.delete(`players:${playerId}`);
   }
 }
 
 export function invalidateMilestoneCache(playerId: string): void {
-  // TODO (Redis): await redis.del(`milestones:${playerId}`)
   cache.delete(`milestones:${playerId}`);
-  // Also bust the player list so updated progress tier is reflected
   invalidatePlayerCache(playerId);
 }
