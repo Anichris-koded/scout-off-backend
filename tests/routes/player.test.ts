@@ -13,6 +13,7 @@ jest.mock('../../src/db', () => ({
   getPlayerProfileHistory: jest.fn().mockReturnValue([]),
   getLatestSubscription: jest.fn().mockReturnValue(null),
   insertSubscription: jest.fn().mockReturnValue(1),
+  upsertPlayer: jest.fn(),
 }));
 
 jest.mock('../../src/services/indexer', () => ({
@@ -23,6 +24,7 @@ jest.mock('../../src/services/indexer', () => ({
 jest.mock('../../src/services/ipfs', () => ({
   pinJson: jest.fn().mockResolvedValue('QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG'),
   gatewayUrl: jest.fn((cid: string) => `https://gateway.pinata.cloud/ipfs/${cid}`),
+  gatewayUrls: jest.fn((cid: string) => [`https://gateway.pinata.cloud/ipfs/${cid}`]),
 }));
 
 jest.mock('../../src/services/webhooks', () => ({
@@ -193,5 +195,40 @@ describe('PUT /api/players/:playerId — owner-only enforcement', () => {
       .send(VALID_UPDATE);
     expect(res.status).toBe(403);
     expect(res.body.success).toBe(false);
+  });
+});
+
+// ─── POST /api/players/register — DB write (#282) ────────────────────────────
+
+describe('POST /api/players/register — immediate DB write (#282)', () => {
+  it('calls upsertPlayer with correct fields after successful registration', async () => {
+    const { upsertPlayer } = require('../../src/db');
+    (upsertPlayer as jest.Mock).mockClear();
+
+    const token = makeToken(PLAYER_WALLET, 'player');
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send(validPayload);
+
+    expect(res.status).toBe(201);
+    expect(upsertPlayer).toHaveBeenCalledTimes(1);
+    const call = (upsertPlayer as jest.Mock).mock.calls[0][0];
+    expect(call.wallet).toBe(PLAYER_WALLET);
+    expect(call.position).toBe('striker');
+    expect(call.region).toBe('europe');
+    expect(call.metadata_uri).toBeDefined();
+    expect(call.player_id).toBeDefined();
+  });
+
+  it('returns playerId in the response body', async () => {
+    const token = makeToken(PLAYER_WALLET, 'player');
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send(validPayload);
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.playerId).toBeDefined();
   });
 });

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { sanitizeInput } from "../utils/sanitizer";
+import { createId } from "@paralleldrive/cuid2";
 import { z } from "zod";
 import { CID_REGEX } from "../utils/cidValidator";
 import { pinJson } from "../services/ipfs";
@@ -10,6 +11,7 @@ import {
   insertPlayerProfileHistory,
   queryPlayers,
   countPlayers,
+  upsertPlayer,
 } from "../db";
 
 import { queryMilestones, updateProfile } from "../services/stellar";
@@ -73,7 +75,21 @@ export async function registerPlayer(
 
     // Invalidate player search cache so new profile appears in results
     invalidatePlayerCache();
+
+    // Write to DB immediately so GET /players/:playerId returns 200 without
+    // waiting for the indexer to process the blockchain event (#282).
+    const playerId = createId();
+    upsertPlayer({
+      player_id: playerId,
+      wallet: parsed.wallet,
+      position: sanitizedPosition,
+      region: sanitizedRegion,
+      metadata_uri: metadataUri,
+      created_at: Math.floor(Date.now() / 1000),
+    });
+
     await dispatchEventWebhook("player_registered", {
+      player_id: playerId,
       wallet: parsed.wallet,
       position: sanitizedPosition,
       region: sanitizedRegion,
@@ -86,10 +102,10 @@ export async function registerPlayer(
       region: sanitizedRegion,
     });
     const body: ApiResponse<
-      typeof ipfsResult & { metadataUri: string; gatewayUrl: string }
+      typeof ipfsResult & { playerId: string; metadataUri: string; gatewayUrl: string }
     > = {
       success: true,
-      data: { ...ipfsResult, metadataUri, gatewayUrl: ipfsResult.uri },
+      data: { ...ipfsResult, playerId, metadataUri, gatewayUrl: ipfsResult.uri },
     };
     res.status(201).json(body);
   } catch (err) {
