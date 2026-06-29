@@ -425,6 +425,12 @@ export async function submitTrialOffer(req: Request, res: Response, next: NextFu
 export async function getPaymentHistory(req: Request, res: Response, next: NextFunction) {
   try {
     const { wallet } = req.params;
+
+    if (req.account !== wallet) {
+      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account', code: ErrorCode.WALLET_MISMATCH });
+      return;
+    }
+
     const { from, to } = req.query as { from?: string; to?: string };
 
     let payments = getEvents('contact_unlocked')
