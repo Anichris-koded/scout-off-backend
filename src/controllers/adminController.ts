@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { getEvents } from '../services/indexer';
+import { invokeContract, strVal, ContractExecutionError } from '../utils/contract';
 import { AdminEvent, FeeHistoryItem, ApiResponse } from '../types';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
@@ -50,7 +51,6 @@ export async function registerValidator(req: Request, res: Response, next: NextF
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
-      console.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
       res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
       return;
     }
@@ -70,15 +70,59 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
-      console.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
       res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
       return;
     }
 
-    console.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet}`);
-    // TODO: invoke revoke_validator on Soroban contract
-    res.status(202).json({ success: true, message: `Validator ${validatorWallet} revocation submitted` });
+    // 404 if validator not currently registered
+    const registered = getEvents('validator_registered' as any).map((e) => e.payload.validator);
+    const revoked = getEvents('validator_revoked' as any).map((e) => e.payload.validator);
+    const isActive = registered.includes(validatorWallet) && !revoked.includes(validatorWallet);
+
+    if (!isActive) {
+      res.status(404).json({ success: false, error: `Validator ${validatorWallet} is not currently registered` });
+      return;
+    }
+
+    const { hash } = await invokeContract('revoke_validator', [strVal(validatorWallet)]);
+
+    console.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet} txHash=${hash}`);
+    res.status(202).json({
+      success: true,
+      message: `Validator ${validatorWallet} revocation submitted`,
+      transactionId: hash,
+    });
   } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/admin/contract/pause */
+export async function pauseContract(req: Request, res: Response, next: NextFunction) {
+  try {
+    const adminWallet = (req as any).account as string;
+
+    // 409 if already paused — check contract_paused events
+    const paused = getEvents('contract_paused' as any);
+    const unpaused = getEvents('contract_unpaused' as any);
+    if (paused.length > unpaused.length) {
+      res.status(409).json({ success: false, error: 'Contract is already paused' });
+      return;
+    }
+
+    const { hash } = await invokeContract('pause', []);
+
+    console.info(`[admin] action=pause_contract admin=${adminWallet} txHash=${hash}`);
+    res.status(202).json({
+      success: true,
+      message: `Contract paused successfully`,
+      transactionId: hash,
+    });
+  } catch (err) {
+    if (err instanceof ContractExecutionError && err.message.includes('ContractPaused')) {
+      res.status(409).json({ success: false, error: 'Contract is already paused' });
+      return;
+    }
     next(err);
   }
 }
