@@ -35,6 +35,21 @@ class Statement {
     ) {
       const [key, value] = args;
       this._db._state.set(key, value);
+    } else if (sql.includes('INDEXER_STATE') && sql.includes('ON CONFLICT')) {
+      const [key, value] = args;
+      this._db._state.set(key, value);
+    } else if (sql.startsWith('INSERT OR IGNORE INTO TRIAL_OFFERS')) {
+      const [scout_wallet, player_id, details_uri, tx_hash, created_at] = args;
+      if (!this._db._trialOffers.find((o) => o.tx_hash === tx_hash)) {
+        this._db._trialOffers.push({
+          id: this._db._trialOffers.length + 1,
+          scout_wallet,
+          player_id,
+          details_uri,
+          tx_hash,
+          created_at,
+        });
+      }
     }
 
     // ── players ─────────────────────────────────────────────────────────────

@@ -39,6 +39,11 @@ const config = {
     process.env.SOROBAN_RPC_URL ?? 'https://soroban-testnet.stellar.org',
   contractId: required('CONTRACT_ID'),
   jwtSecret: required('JWT_SECRET'),
+<<<<<<< feat/issue-273-jwt-key-rotation
+  jwtSecretPrevious: process.env.JWT_SECRET_PREVIOUS ?? '',
+=======
+  platformSecret: process.env.PLATFORM_SECRET ?? '',
+>>>>>>> main
   pinata: {
     apiKey: process.env.PINATA_API_KEY ?? '',
     secret: process.env.PINATA_SECRET ?? '',

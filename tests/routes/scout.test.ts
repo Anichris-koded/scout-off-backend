@@ -59,6 +59,35 @@ beforeEach(() => {
   (getLatestSubscription as jest.Mock).mockReset().mockReturnValue(null);
 });
 
+// ─── Wallet address validation ─────────────────────────────────────────────────
+
+describe('wallet address validation', () => {
+  it('returns 400 for an invalid wallet in GET subscription', async () => {
+    const res = await request(app)
+      .get('/api/scouts/not-a-valid-address/subscription')
+      .set('Authorization', `Bearer ${makeToken(WALLET)}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, error: 'Invalid Stellar address' });
+  });
+
+  it('returns 400 for an invalid wallet in GET contacts', async () => {
+    const res = await request(app)
+      .get('/api/scouts/not-a-valid-address/contacts')
+      .set('Authorization', `Bearer ${makeToken(WALLET)}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, error: 'Invalid Stellar address' });
+  });
+
+  it('returns 400 for an invalid wallet in GET payments', async () => {
+    mockGetEvents.mockReturnValue([]);
+    const res = await request(app)
+      .get('/api/scouts/not-a-valid-address/payments')
+      .set('Authorization', `Bearer ${makeToken(WALLET)}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, error: 'Invalid Stellar address' });
+  });
+});
+
 // ─── GET /api/scouts/:wallet/subscription ─────────────────────────────────────
 
 describe('GET /api/scouts/:wallet/subscription', () => {
@@ -107,6 +136,54 @@ describe('GET /api/scouts/:wallet/subscription', () => {
     expect(res.body.data.tier).toBe('pro');
     expect(res.body.data.expiresAt).toBe(expiresAt);
     expect(res.body.data.remainingDays).toBeGreaterThan(0);
+  });
+
+  it('returns 400 for invalid duration values on subscribe endpoint', async () => {
+    const token = makeToken(WALLET);
+
+    let res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 0 });
+    expect(res.status).toBe(400);
+
+    res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: -5 });
+    expect(res.status).toBe(400);
+
+    res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 366 });
+    expect(res.status).toBe(400);
+
+    res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 2.5 });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts 1 and 365 duration values for subscribe endpoint', async () => {
+    const token = makeToken(WALLET);
+
+    let res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.duration).toBe(1);
+
+    res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 365 });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.duration).toBe(365);
   });
 
   it('returns expired subscription as inactive with 0 remainingDays', async () => {
