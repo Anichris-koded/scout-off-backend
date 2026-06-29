@@ -1,7 +1,3 @@
-/**
- * Tests for CORS origin allowlist behaviour (issue #270).
- */
-
 jest.mock('../../src/services/ipfs', () => ({
   pinJson: jest.fn(),
   pinFile: jest.fn(),
@@ -35,7 +31,6 @@ describe('CORS origin allowlist', () => {
     const res = await request(app)
       .get('/health')
       .set('Origin', 'https://evil.example.com');
-    // cors middleware omits the header for disallowed origins
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
@@ -48,5 +43,40 @@ describe('CORS origin allowlist', () => {
       .get('/health')
       .set('Origin', 'https://anything.example.com');
     expect(res.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  it('supports multiple allowlisted origins', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ALLOWED_ORIGINS = 'https://app.scoutoff.io,https://staging.scoutoff.io';
+
+    const { default: app } = await import('../../src/app');
+    const res = await request(app)
+      .get('/health')
+      .set('Origin', 'https://staging.scoutoff.io');
+    expect(res.headers['access-control-allow-origin']).toBe('https://staging.scoutoff.io');
+  });
+
+  it('returns CORS headers on preflight OPTIONS request for allowed origin', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ALLOWED_ORIGINS = ALLOWED;
+
+    const { default: app } = await import('../../src/app');
+    const res = await request(app)
+      .options('/health')
+      .set('Origin', ALLOWED)
+      .set('Access-Control-Request-Method', 'GET');
+    expect(res.headers['access-control-allow-origin']).toBe(ALLOWED);
+  });
+
+  it('omits CORS header on preflight OPTIONS for disallowed origin', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ALLOWED_ORIGINS = ALLOWED;
+
+    const { default: app } = await import('../../src/app');
+    const res = await request(app)
+      .options('/health')
+      .set('Origin', 'https://attacker.example.com')
+      .set('Access-Control-Request-Method', 'GET');
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 });
