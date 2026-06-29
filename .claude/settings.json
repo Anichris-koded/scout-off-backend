@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/mac/Desktop/shakurJJ/scout-off-backend log --oneline -8)"
+    ]
+  }
+}

@@ -22,6 +22,40 @@ export interface PlayerMetadata {
   stats?: Record<string, string | number>;
 }
 
+// Detailed player profile stored off-chain (IPFS JSON). Example:
+// {
+//   "displayName": "John Doe",
+//   "birthDate": "2004-05-10",
+//   "positions": ["LW","ST"],
+//   "bio": "Youth prospect",
+//   "social": { "instagram": "@johndoe" },
+//   "milestones": [{ "id": "m1", "type": "performance", "note": "Scored hat-trick" }]
+// }
+export interface PlayerProfile {
+  displayName: string;
+  birthDate?: string; // ISO date string
+  positions: string[];
+  bio?: string;
+  social?: Record<string, string>;
+  // Off-chain references to milestone summaries or documents
+  milestones?: Array<{
+    id: string;
+    type: MilestoneType;
+    note?: string;
+    evidenceCid?: string; // IPFS CID
+  }>;
+}
+
+// Subscription state for scouts subscribing to player contact details
+export interface Subscription {
+  subscriptionId: string;
+  scoutWallet: string;
+  playerId: string;
+  startedAt: number; // unix timestamp
+  expiresAt?: number; // optional expiry timestamp
+  tier?: string;
+}
+
 // ─── Milestone ────────────────────────────────────────────────────────────────
 
 export type MilestoneType = 'identity' | 'performance' | 'trial_offer';
@@ -62,15 +96,15 @@ export interface ContactUnlock {
 
 export interface AdminEvent {
   type: ContractEventType;
+  ledger: number;
+  txHash: string;
   payload: Record<string, unknown>;
-  contractAddress: string;
 }
 
 export interface FeeHistoryItem {
   amount: number;
   recipient: string;
-  timestamp: number;
-  txHash: string;
+  ledger: number;
 }
 
 // ─── API shapes ───────────────────────────────────────────────────────────────
@@ -79,6 +113,8 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  code?: string;
+  correlationId?: string;
 }
 
 export interface PaginatedResponse<T> extends ApiResponse<T[]> {
@@ -140,4 +176,5 @@ export interface EventRecord {
   type: ContractEventType;
   payload: Record<string, unknown>;
   contractAddress: string;
+  created_at?: number | null;
 }
