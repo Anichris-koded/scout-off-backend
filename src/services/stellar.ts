@@ -10,8 +10,41 @@ import {
   scValToNative,
 } from '@stellar/stellar-sdk';
 import config from '../config';
+import http from 'http';
+import https from 'https';
+import { logger } from '../utils/logger';
 
-const server = new SorobanRpc.Server(config.sorobanRpcUrl);
+// Configure HTTP keepalive agents for connection reuse
+const httpAgent = new http.Agent({ 
+  keepAlive: true,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: 60000,
+});
+
+const httpsAgent = new https.Agent({ 
+  keepAlive: true,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: 60000,
+});
+
+const server = new SorobanRpc.Server(config.sorobanRpcUrl, {
+  allowHttp: config.sorobanRpcUrl.startsWith('http://'),
+});
+
+// Configure the HTTP client to use keepalive agents
+// The SDK version 12.1.0 uses axios internally
+if (server.httpClient && typeof (server.httpClient as any).defaults === 'object') {
+  (server.httpClient as any).defaults.httpAgent = httpAgent;
+  (server.httpClient as any).defaults.httpsAgent = httpsAgent;
+  
+  // Log keepalive configuration for verification
+  if (config.nodeEnv === 'development' || config.nodeEnv === 'test') {
+    logger.info('[SorobanRPC] HTTP keepalive enabled with httpAgent and httpsAgent');
+    logger.info('[SorobanRPC] maxSockets: 50, maxFreeSockets: 10, timeout: 60000ms');
+  }
+}
 
 export { server };
 
