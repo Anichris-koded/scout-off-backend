@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { sanitizeInput } from "../utils/sanitizer";
 import { createId } from "@paralleldrive/cuid2";
@@ -127,7 +128,8 @@ export async function getPlayer(
       return;
     }
     const { tierName, tierDescription } = getTierMeta(row.progress_level);
-    res.json({
+
+    const body = {
       success: true,
       data: {
         player_id: row.player_id,
@@ -140,7 +142,18 @@ export async function getPlayer(
         tierName,
         tierDescription,
       },
-    });
+    };
+
+    const etagSource = `${row.player_id}:${row.metadata_uri ?? ''}:${row.progress_level}:${row.created_at ?? ''}`;
+    const etag = `"${crypto.createHash("md5").update(etagSource).digest("hex")}"`;
+    res.set("ETag", etag);
+
+    if (req.headers["if-none-match"] === etag) {
+      res.status(304).end();
+      return;
+    }
+
+    res.json(body);
   } catch (err) {
     next(err);
   }
