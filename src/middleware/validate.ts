@@ -1,5 +1,15 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { ZodSchema } from 'zod';
+import { logger } from '../utils/logger';
+import { ErrorCode } from '../utils/errorCodes';
+
+interface ValidationOptions {
+  context?: string;
+}
+
+function getCorrelationId(req: Request): string {
+  return String(req.headers?.['x-correlation-id'] ?? req.headers?.['correlation-id'] ?? 'none');
+}
 
 /**
  * Middleware factory that validates `req.body` against a Zod schema.
@@ -9,13 +19,21 @@ import { ZodSchema } from 'zod';
  *
  * Usage: router.post('/route', validateBody(mySchema), handler)
  */
-export function validateBody<T>(schema: ZodSchema<T>) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+export function validateBody<T>(schema: ZodSchema<T>, options?: ValidationOptions): RequestHandler {
+  return (req, res, next): void => {
     const result = schema.safeParse(req.body);
     if (!result.success) {
+      const correlationId = getCorrelationId(req);
+      logger.warn(
+        `[validation] ${options?.context ?? 'body'} rejected — error=${
+          result.error.errors[0]?.message ?? 'Invalid request body'
+        } correlationId=${correlationId}`
+      );
       res.status(400).json({
         success: false,
         error: result.error.errors[0]?.message ?? 'Invalid request body',
+        code: ErrorCode.VALIDATION_ERROR,
+        correlationId,
       });
       return;
     }
@@ -32,18 +50,56 @@ export function validateBody<T>(schema: ZodSchema<T>) {
  *
  * Usage: router.get('/route', validateQuery(mySchema), handler)
  */
-export function validateQuery<T>(schema: ZodSchema<T>) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+export function validateQuery<T>(schema: ZodSchema<T>, options?: ValidationOptions): RequestHandler {
+  return (req, res, next): void => {
     const result = schema.safeParse(req.query);
     if (!result.success) {
+      const correlationId = getCorrelationId(req);
+      logger.warn(
+        `[validation] ${options?.context ?? 'query'} rejected — error=${
+          result.error.errors[0]?.message ?? 'Invalid query parameters'
+        } correlationId=${correlationId}`
+      );
       res.status(400).json({
         success: false,
         error: result.error.errors[0]?.message ?? 'Invalid query parameters',
+        code: ErrorCode.VALIDATION_ERROR,
+        correlationId,
       });
       return;
     }
     // Cast so the controller can read coerced + defaulted values via req.query
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (req as any).query = result.data;
+    next();
+  };
+}
+
+/**
+ * Middleware factory that validates `req.params` against a Zod schema.
+ *
+ * On validation failure: returns HTTP 400 with `{ success: false, error: '<message>' }`.
+ * On success: merges validated params back into `req.params` and calls `next()`.
+ *
+ * Usage: router.get('/route/:id', validateParams(mySchema), handler)
+ */
+export function validateParams<T>(schema: ZodSchema<T>, options?: ValidationOptions): RequestHandler {
+  return (req, res, next): void => {
+    const result = schema.safeParse(req.params);
+    if (!result.success) {
+      const correlationId = getCorrelationId(req);
+      logger.warn(
+        `[validation] ${options?.context ?? 'params'} rejected — error=${
+          result.error.errors[0]?.message ?? 'Invalid route parameters'
+        } correlationId=${correlationId}`
+      );
+      res.status(400).json({
+        success: false,
+        error: result.error.errors[0]?.message ?? 'Invalid route parameters',
+      });
+      return;
+    }
+    req.params = { ...req.params, ...(result.data as unknown as Record<string, string>) };
     next();
   };
 }

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import {
   Keypair,
   Networks,
@@ -15,6 +16,14 @@ const CHALLENGE_TTL_SECONDS = 300; // 5 min to sign the challenge
 const TOKEN_TTL_SECONDS = 86400;   // 24 h JWT validity
 
 /**
+ * Returns the server keypair used for signing challenges.
+ * Exposed for verification logic and testing.
+ */
+export function getServerKeypair(): Keypair {
+  return SERVER_KEYPAIR;
+}
+
+/**
  * Build a SEP-10 challenge transaction.
  * The client must sign it with their Stellar keypair and return the XDR.
  */
@@ -28,7 +37,7 @@ export function buildChallenge(accountId: string): string {
     .addOperation(
       Operation.manageData({
         name: 'scoutoff auth',
-        value: Buffer.from(Keypair.random().rawPublicKey()).toString('base64'),
+        value: crypto.randomBytes(48).toString('base64'),
         source: accountId,
       })
     )
@@ -56,6 +65,20 @@ export function extractAccount(xdr: string): string | null {
 
 /**
  * Verify the client-signed challenge XDR and issue a JWT.
+ *
+ * This implements SEP-10 authentication by:
+ * 1. Validating the challenge transaction structure
+ * 2. Cryptographically verifying the client's signature using Keypair.verify()
+ * 3. Issuing a JWT with client account and role claim
+ *
+ * Note: The role parameter is expected to be pre-validated by the caller.
+ * Role enforcement (e.g., enum validation) is handled in the auth controller.
+ * Authorized routes use requireRole() or requireRoles() middleware to enforce access.
+ *
+ * @param xdr - The signed challenge transaction in XDR format
+ * @param role - Optional role claim for the JWT (defaults to 'player'). Must be validated by caller.
+ * @returns JWT token and authenticated account ID
+ * @throws Error if challenge structure is invalid or signature verification fails
  */
 export function verifyAndIssueToken(xdr: string, role?: string): { token: string; account: string } {
   const network =
@@ -63,22 +86,70 @@ export function verifyAndIssueToken(xdr: string, role?: string): { token: string
 
   const tx = new Transaction(xdr, network);
 
-  // The first operation's source is the client account
-  const clientAccountId = tx.operations[0].source;
-  if (!clientAccountId) throw new Error('Missing source account in challenge');
+  // Enforce challenge TTL — reject expired challenges to prevent replay attacks
+  const maxTime = Number(tx.timeBounds?.maxTime ?? 0);
+  if (maxTime > 0 && Math.floor(Date.now() / 1000) > maxTime) {
+    throw new Error('Challenge has expired');
+  }
 
-  // Verify the client signed it
+  // Validate challenge transaction structure
+  if (!tx.operations || tx.operations.length === 0) {
+    throw new Error('Invalid challenge: no operations found');
+  }
+
+  const op = tx.operations[0];
+
+  // 1. Verify the first operation is manageData
+  if (op.type !== 'manageData') {
+    throw new Error('Invalid challenge: expected manageData operation');
+  }
+
+  // 2. Verify the operation name matches the expected server string
+  const manageDataOp = op as Operation.ManageData;
+  if (manageDataOp.name !== 'scoutoff auth') {
+    throw new Error('Invalid challenge: wrong operation name');
+  }
+
+  // 3. Verify the nonce value is present and properly formatted (64 bytes)
+  if (!manageDataOp.value) {
+    throw new Error('Invalid challenge: missing nonce value');
+  }
+
+  // Validate the nonce is exactly 64 bytes by checking the raw buffer length
+  if (manageDataOp.value.length !== 64) {
+    throw new Error('Invalid challenge: nonce must be exactly 64 bytes');
+  }
+
+  // 4. Verify the operation's source is the client account
+  const clientAccountId = manageDataOp.source;
+  if (!clientAccountId) {
+    throw new Error('Missing source account in challenge');
+  }
+
+  // 5. Verify the server signed the challenge (proves it was built by this server)
+  // Per SEP-10, the challenge must originate from the server keypair
+  const serverSigned = tx.signatures.some((sig) => {
+    try {
+      return SERVER_KEYPAIR.verify(tx.hash(), sig.signature());
+    } catch {
+      return false;
+    }
+  });
+  if (!serverSigned) throw new Error('Challenge not signed by server');
+
+  // 6. Cryptographically verify the client signed the transaction
+  // Using Keypair.verify() for proper ECDSA signature validation per SEP-10
   const clientKeypair = Keypair.fromPublicKey(clientAccountId);
-  const valid = tx.signatures.some((sig) => {
+  const clientSigned = tx.signatures.some((sig) => {
     try {
       return clientKeypair.verify(tx.hash(), sig.signature());
     } catch {
       return false;
     }
   });
+  if (!clientSigned) throw new Error('Invalid challenge signature');
 
-  if (!valid) throw new Error('Invalid challenge signature');
-
+  // Issue JWT with client account and role
   const token = jwt.sign({ sub: clientAccountId, role: role ?? 'player' }, config.jwtSecret, {
     expiresIn: TOKEN_TTL_SECONDS,
   });

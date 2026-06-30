@@ -1,5 +1,5 @@
 -- Migration 001: initial schema
--- Applied automatically by indexer.ts on startup via better-sqlite3.
+-- Applied automatically by runMigrations() (src/db/migrate.ts) on startup.
 -- This file is the canonical reference for the DB schema.
 
 CREATE TABLE IF NOT EXISTS events (
@@ -18,3 +18,17 @@ CREATE TABLE IF NOT EXISTS indexer_state (
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_events_type   ON events (type);
 CREATE INDEX IF NOT EXISTS idx_events_ledger ON events (ledger);
+
+CREATE TABLE IF NOT EXISTS players (
+  player_id      TEXT    PRIMARY KEY,
+  wallet         TEXT    NOT NULL,
+  position       TEXT,
+  region         TEXT,
+  metadata_uri   TEXT,
+  progress_level INTEGER DEFAULT 0,
+  created_at     INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_players_region   ON players (region);
+CREATE INDEX IF NOT EXISTS idx_players_position ON players (position);
+CREATE INDEX IF NOT EXISTS idx_players_tier     ON players (progress_level);
