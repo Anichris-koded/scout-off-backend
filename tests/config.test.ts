@@ -3,14 +3,24 @@ process.env.JWT_SECRET = 'test-secret';
 
 describe('config NODE_ENV toggles', () => {
   const originalEnv = process.env.NODE_ENV;
+  const originalAdminWallet = process.env.ADMIN_WALLET;
 
   afterEach(() => {
     process.env.NODE_ENV = originalEnv;
+    if (originalAdminWallet !== undefined) {
+      process.env.ADMIN_WALLET = originalAdminWallet;
+    } else {
+      delete process.env.ADMIN_WALLET;
+    }
     jest.resetModules();
   });
 
   async function loadConfig(env: string) {
     process.env.NODE_ENV = env;
+    // Ensure ADMIN_WALLET is set when loading production/staging config
+    if (env === 'production' || env === 'staging') {
+      process.env.ADMIN_WALLET = 'GADMINWALLET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    }
     jest.resetModules();
     const mod = await import('../src/config');
     return mod.default;
@@ -18,6 +28,9 @@ describe('config NODE_ENV toggles', () => {
 
   async function loadHelpers(env: string) {
     process.env.NODE_ENV = env;
+    if (env === 'production' || env === 'staging') {
+      process.env.ADMIN_WALLET = 'GADMINWALLET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    }
     jest.resetModules();
     return import('../src/config');
   }

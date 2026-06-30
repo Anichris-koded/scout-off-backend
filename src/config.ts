@@ -20,6 +20,20 @@ if (!VALID_ENVS.has(rawNodeEnv)) {
 }
 const nodeEnv = rawNodeEnv as NodeEnv;
 
+// Validate ADMIN_WALLET based on environment:
+// - production: throw immediately so the process never starts without it
+// - staging: emit a console warning (process continues)
+const adminWalletValue = process.env.ADMIN_WALLET ?? '';
+if (!adminWalletValue) {
+  if (nodeEnv === 'production') {
+    throw new Error('ADMIN_WALLET is required in production but is not set. Set the ADMIN_WALLET environment variable to the platform admin Stellar address.');
+  }
+  if (nodeEnv === 'staging') {
+    // eslint-disable-next-line no-console
+    console.warn('[config] WARNING: ADMIN_WALLET is not set in staging. Admin-seeding will be disabled. Set ADMIN_WALLET to suppress this warning.');
+  }
+}
+
 const ENV_LOG_LEVEL: Record<NodeEnv, LogLevel> = {
   development: 'debug',
   test: 'warn',
