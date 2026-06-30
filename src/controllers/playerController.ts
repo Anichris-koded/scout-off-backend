@@ -54,6 +54,17 @@ export const filterSchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+/**
+ * Returns the first player_registered event payload for the given playerId,
+ * or undefined if no such player exists.
+ */
+export function getPlayerById(playerId: string): Record<string, unknown> | undefined {
+  const events = getEvents('player_registered').filter(
+    (e) => e.payload.player_id === playerId
+  );
+  return events.length ? events[0].payload : undefined;
+}
+
 /** POST /api/players/register */
 export async function registerPlayer(
   req: Request,
