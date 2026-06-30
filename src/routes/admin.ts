@@ -1,8 +1,12 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, introspectToken } from '../controllers/adminController';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { ipAllowlistMiddleware } from '../middleware/ipAllowlist';
 
 const router = Router();
+
+// Enforce IP allowlist for all admin endpoints (no-op when ADMIN_IP_ALLOWLIST is unset)
+router.use(ipAllowlistMiddleware);
 
 /**
  * GET /api/admin/stats
@@ -67,12 +71,13 @@ router.post('/validators/revoke', requireRole('admin'), revokeValidator);
 /**
  * POST /api/admin/introspect
  *
- * Validates a JWT and returns its payload metadata without exposing secrets.
- * Useful for admins to inspect token claims (subject, role, expiry).
+ * Decodes the caller's own bearer token and returns its payload metadata.
+ * The token is extracted from the Authorization header only — no body input is accepted.
+ * Useful for admins to inspect their own token claims (subject, role, expiry).
  *
- * @body token {string} - JWT to introspect
  * @response 200 { success: true, data: { sub, role, iat, exp } }
- * @response 400 { success: false, error: string } - Missing token or invalid/expired JWT
+ * @response 401 { success: false, error: string } - Missing or invalid bearer token
+ * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
 router.post('/introspect', requireRole('admin'), introspectToken);
