@@ -33,14 +33,14 @@ describe('responseTime middleware', () => {
   it('sets X-Response-Time header on finish with "ms" suffix', () => {
     const { req, res, next, headers } = makeReqRes();
     responseTime(req, res, next);
-    (res as any).emit('finish');
+    res.emit('finish');
     expect(headers['x-response-time']).toMatch(/^\d+ms$/);
   });
 
   it('X-Response-Time value is a non-negative integer', () => {
     const { req, res, next, headers } = makeReqRes();
     responseTime(req, res, next);
-    (res as any).emit('finish');
+    res.emit('finish');
     const ms = parseInt(headers['x-response-time'], 10);
     expect(ms).toBeGreaterThanOrEqual(0);
   });
