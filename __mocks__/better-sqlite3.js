@@ -2,7 +2,22 @@
  * Manual Jest mock for better-sqlite3.
  * Provides a minimal in-memory SQL-like interface so tests can run without
  * the native binary (which requires a matching Node ABI).
+ *
+ * Supported operations:
+ *  - events table  (INSERT OR IGNORE / SELECT)
+ *  - indexer_state table (INSERT / SELECT)
+ *  - schema_migrations table (INSERT / SELECT) — used by runMigrations()
+ *  - sqlite_master SELECT — reports which tables have been "created"
+ *  - PRAGMA table_info — returns column metadata for created tables
  */
+
+// Column definitions for tables we understand, keyed by table name.
+const TABLE_COLUMNS = {
+  events: ['id', 'type', 'ledger', 'tx_hash', 'payload'],
+  indexer_state: ['key', 'value'],
+  schema_migrations: ['version', 'applied_at'],
+  trial_offers: ['id', 'scout', 'player_id', 'details_uri', 'ledger', 'tx_hash', 'created_at'],
+};
 
 class Statement {
   constructor(db, sql) {
@@ -296,8 +311,13 @@ class Database {
     this._offerIdSeq = 1;
   }
 
-  exec(_sql) {
-    // no-op: CREATE TABLE statements are ignored
+  exec(sql) {
+    // Parse CREATE TABLE statements so sqlite_master queries work.
+    const createRe = /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)/gi;
+    let m;
+    while ((m = createRe.exec(sql)) !== null) {
+      this._createdTables.add(m[1].toLowerCase());
+    }
   }
 
   prepare(sql) {
