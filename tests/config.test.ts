@@ -3,14 +3,24 @@ process.env.JWT_SECRET = 'test-secret';
 
 describe('config NODE_ENV toggles', () => {
   const originalEnv = process.env.NODE_ENV;
+  const originalAdminWallet = process.env.ADMIN_WALLET;
 
   afterEach(() => {
     process.env.NODE_ENV = originalEnv;
+    if (originalAdminWallet !== undefined) {
+      process.env.ADMIN_WALLET = originalAdminWallet;
+    } else {
+      delete process.env.ADMIN_WALLET;
+    }
     jest.resetModules();
   });
 
   async function loadConfig(env: string) {
     process.env.NODE_ENV = env;
+    // Ensure ADMIN_WALLET is set when loading production/staging config
+    if (env === 'production' || env === 'staging') {
+      process.env.ADMIN_WALLET = 'GADMINWALLET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    }
     jest.resetModules();
     const mod = await import('../src/config');
     return mod.default;
@@ -18,6 +28,9 @@ describe('config NODE_ENV toggles', () => {
 
   async function loadHelpers(env: string) {
     process.env.NODE_ENV = env;
+    if (env === 'production' || env === 'staging') {
+      process.env.ADMIN_WALLET = 'GADMINWALLET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    }
     jest.resetModules();
     return import('../src/config');
   }
@@ -76,5 +89,86 @@ describe('config NODE_ENV toggles', () => {
     process.env.NODE_ENV = 'invalid_env';
     jest.resetModules();
     await expect(import('../src/config')).rejects.toThrow('Invalid NODE_ENV');
+  });
+});
+
+// ─── ADMIN_WALLET validation ──────────────────────────────────────────────────
+
+describe('config ADMIN_WALLET validation', () => {
+  const originalEnv = process.env.NODE_ENV;
+  const originalAdminWallet = process.env.ADMIN_WALLET;
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalEnv;
+    if (originalAdminWallet !== undefined) {
+      process.env.ADMIN_WALLET = originalAdminWallet;
+    } else {
+      delete process.env.ADMIN_WALLET;
+    }
+    jest.resetModules();
+  });
+
+  it('throws in production when ADMIN_WALLET is not set', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.ADMIN_WALLET;
+    jest.resetModules();
+    await expect(import('../src/config')).rejects.toThrow('ADMIN_WALLET is required in production');
+  });
+
+  it('error message names the missing env var', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.ADMIN_WALLET;
+    jest.resetModules();
+    await expect(import('../src/config')).rejects.toThrow('ADMIN_WALLET');
+  });
+
+  it('throws in production when ADMIN_WALLET is an empty string', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ADMIN_WALLET = '';
+    jest.resetModules();
+    await expect(import('../src/config')).rejects.toThrow('ADMIN_WALLET is required in production');
+  });
+
+  it('does not throw in production when ADMIN_WALLET is set', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ADMIN_WALLET = 'GADMINWALLET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    jest.resetModules();
+    await expect(import('../src/config')).resolves.toBeTruthy();
+  });
+
+  it('logs a warning in staging when ADMIN_WALLET is not set', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.NODE_ENV = 'staging';
+    delete process.env.ADMIN_WALLET;
+    jest.resetModules();
+    await import('../src/config');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('ADMIN_WALLET'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn in staging when ADMIN_WALLET is set', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.NODE_ENV = 'staging';
+    process.env.ADMIN_WALLET = 'GADMINWALLET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    jest.resetModules();
+    await import('../src/config');
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('does not throw in development when ADMIN_WALLET is not set', async () => {
+    process.env.NODE_ENV = 'development';
+    delete process.env.ADMIN_WALLET;
+    jest.resetModules();
+    await expect(import('../src/config')).resolves.toBeTruthy();
+  });
+
+  it('does not throw in test when ADMIN_WALLET is not set', async () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.ADMIN_WALLET;
+    jest.resetModules();
+    await expect(import('../src/config')).resolves.toBeTruthy();
   });
 });
