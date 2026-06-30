@@ -275,3 +275,41 @@ describe('POST /api/validators/milestone', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('GET /api/players/:playerId/milestones', () => {
+  it('returns 404 for a non-existent player ID', async () => {
+    const res = await request(app).get('/api/players/nonexistent-player-xyz/milestones');
+    expect(res.status).toBe(404);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Player not found');
+  });
+});
+
+describe('POST /api/scouts/trial-offer', () => {
+  it('returns 401 when no token is provided', async () => {
+    const res = await request(app)
+      .post('/api/scouts/trial-offer')
+      .send({ playerId: 'player-1', detailsUri: 'ipfs://QmTest' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 400 for missing required fields', async () => {
+    const token = await getPlayerToken();
+    const res = await request(app)
+      .post('/api/scouts/trial-offer')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 201 for a valid authenticated request', async () => {
+    const token = await getPlayerToken();
+    const res = await request(app)
+      .post('/api/scouts/trial-offer')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ playerId: 'player-1', detailsUri: 'ipfs://QmTrialOfferTest' });
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveProperty('offerCid');
+  });
+});

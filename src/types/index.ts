@@ -89,6 +89,24 @@ export interface JwtPayload {
   permissions?: string[];
 }
 
+// ─── Express Request augmentation ─────────────────────────────────────────────
+//
+// Extends the Express Request interface so that req.account and req.role are
+// properly typed throughout the codebase — no (req as any) casts needed.
+// These fields are attached by requireAuth / requireRole middleware in
+// src/middleware/auth.ts.
+
+declare global {
+  namespace Express {
+    interface Request {
+      /** Stellar public key of the authenticated user (set by auth middleware). */
+      account?: string;
+      /** Role of the authenticated user, e.g. 'admin', 'validator', 'scout'. */
+      role?: string;
+    }
+  }
+}
+
 // ─── SEP-10 ───────────────────────────────────────────────────────────────────
 
 export interface Sep10Challenge {
@@ -100,6 +118,25 @@ export interface Sep10Token {
   token: string;
   account: string;
   expiresAt: number; // Unix timestamp
+}
+
+// ─── Admin ────────────────────────────────────────────────────────────────────
+
+/** Shape of a contract event as returned by GET /api/admin/events. */
+export interface AdminEvent {
+  type: string;
+  ledger: number;
+  txHash: string;
+  payload: Record<string, unknown>;
+}
+
+/** Shape of a single fee withdrawal record from GET /api/admin/fees. */
+export interface FeeHistoryItem {
+  amount: string;        // XLM amount as string
+  recipient: string;     // Stellar address
+  ledger: number;
+  txHash: string;
+  timestamp: number;     // Unix timestamp
 }
 
 // ─── Contract events (indexed) ────────────────────────────────────────────────
