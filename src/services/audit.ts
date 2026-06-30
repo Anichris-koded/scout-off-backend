@@ -2,9 +2,8 @@ import { logger } from '../utils/logger';
 
 export interface AuditEvent {
   action: string;
-  adminWallet: string;
-  queryParams: Record<string, unknown>;
   timestamp: string;
+  [key: string]: unknown; // allow arbitrary context fields
 }
 
 /**

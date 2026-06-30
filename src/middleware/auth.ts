@@ -2,23 +2,38 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import config from '../config';
 import { JwtPayload } from '../types';
+import { logAuditEvent } from '../services/audit';
 
 export interface AuthPayload extends jwt.JwtPayload, Partial<JwtPayload> {}
+
+/** Extract the client IP from the request (handles proxies via x-forwarded-for). */
+function getIp(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) {
+    return String(forwarded).split(',')[0].trim();
+  }
+  return req.socket?.remoteAddress ?? 'unknown';
+}
 
 /**
  * Middleware that verifies any valid JWT Bearer token.
  * Attaches `req.account` (Stellar public key) and `req.role` on success.
  * Returns 401 if the token is missing or invalid.
+ * All 401 responses are persisted to the audit trail.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
-    console.warn({
-      method: req.method,
+    const reason = 'Missing auth token';
+    console.warn({ method: req.method, path: req.path, error: reason });
+    logAuditEvent({
+      action: 'auth_failed',
+      timestamp: new Date().toISOString(),
+      ip: getIp(req),
       path: req.path,
-      error: 'Missing auth token',
+      reason,
     });
-    res.status(401).json({ success: false, error: 'Missing auth token' });
+    res.status(401).json({ success: false, error: reason });
     return;
   }
   try {
@@ -27,12 +42,16 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     (req as any).role = payload.role;
     next();
   } catch {
-    console.warn({
-      method: req.method,
+    const reason = 'Invalid or expired token';
+    console.warn({ method: req.method, path: req.path, error: reason });
+    logAuditEvent({
+      action: 'auth_failed',
+      timestamp: new Date().toISOString(),
+      ip: getIp(req),
       path: req.path,
-      error: 'Invalid or expired token',
+      reason,
     });
-    res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    res.status(401).json({ success: false, error: reason });
   }
 }
 
@@ -43,44 +62,64 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  *
  * Returns 401 if no valid token is present.
  * Returns 403 if the token's role does not match.
+ * All 401 and 403 responses are persisted to the audit trail.
  */
 export function requireRole(role: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) {
-      console.warn({
-        method: req.method,
+      const reason = 'Missing auth token';
+      console.warn({ method: req.method, path: req.path, error: reason, requiredRole: role });
+      logAuditEvent({
+        action: 'auth_failed',
+        timestamp: new Date().toISOString(),
+        ip: getIp(req),
         path: req.path,
-        error: 'Missing auth token',
         requiredRole: role,
+        reason,
       });
-      res.status(401).json({ success: false, error: 'Missing auth token' });
+      res.status(401).json({ success: false, error: reason });
       return;
     }
     try {
       const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
       if (payload.role !== role) {
+        const reason = 'Insufficient permissions';
         console.warn({
           method: req.method,
           path: req.path,
-          error: 'Insufficient permissions',
+          error: reason,
           requiredRole: role,
           providedRole: payload.role,
         });
-        res.status(403).json({ success: false, error: 'Insufficient permissions' });
+        logAuditEvent({
+          action: 'auth_forbidden',
+          timestamp: new Date().toISOString(),
+          ip: getIp(req),
+          path: req.path,
+          wallet: payload.sub ?? null,
+          requiredRole: role,
+          providedRole: payload.role ?? null,
+          reason,
+        });
+        res.status(403).json({ success: false, error: reason });
         return;
       }
       (req as any).account = payload.sub;
       (req as any).role = payload.role;
       next();
     } catch {
-      console.warn({
-        method: req.method,
+      const reason = 'Invalid or expired token';
+      console.warn({ method: req.method, path: req.path, error: reason, requiredRole: role });
+      logAuditEvent({
+        action: 'auth_failed',
+        timestamp: new Date().toISOString(),
+        ip: getIp(req),
         path: req.path,
-        error: 'Invalid or expired token',
         requiredRole: role,
+        reason,
       });
-      res.status(401).json({ success: false, error: 'Invalid or expired token' });
+      res.status(401).json({ success: false, error: reason });
     }
   };
 }
