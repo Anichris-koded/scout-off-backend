@@ -222,6 +222,44 @@ describe('GET /api/scouts/:wallet/subscription', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.tier).toBe('basic');
   });
+
+  it('returns tier:"premium" for a premium subscriber', async () => {
+    const expiresAt = Math.floor(Date.now() / 1000) + 86400 * 30;
+    mockGetEvents.mockReturnValue([
+      {
+        source: 'contract',
+        type: 'scout_subscribed',
+        contractAddress: 'contract',
+        payload: { scout: WALLET, subscriptionExpiry: expiresAt, tier: 'premium' },
+      },
+    ]);
+    const token = makeToken(WALLET);
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/subscription`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.active).toBe(true);
+    expect(res.body.data.tier).toBe('premium');
+  });
+
+  it('returns tier:"basic" for an explicit basic subscriber', async () => {
+    const expiresAt = Math.floor(Date.now() / 1000) + 86400 * 7;
+    mockGetEvents.mockReturnValue([
+      {
+        source: 'contract',
+        type: 'scout_subscribed',
+        contractAddress: 'contract',
+        payload: { scout: WALLET, subscriptionExpiry: expiresAt, tier: 'basic' },
+      },
+    ]);
+    const token = makeToken(WALLET);
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/subscription`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.active).toBe(true);
+    expect(res.body.data.tier).toBe('basic');
+  });
 });
 
 // ─── GET /api/scouts/:wallet/contacts ─────────────────────────────────────────
