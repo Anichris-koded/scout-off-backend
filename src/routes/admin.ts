@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, listValidators, introspectToken } from '../controllers/adminController';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 const router = Router();
@@ -33,6 +33,17 @@ router.get('/events', requireAuth, getAllEvents);
  * @auth Bearer (any authenticated user)
  */
 router.get('/fees', requireAuth, getFeeSummary);
+
+/**
+ * GET /api/admin/validators
+ *
+ * Returns the full list of registered validator wallets from the local DB,
+ * including their registration timestamp, revocation timestamp (if any), and tx_hash.
+ *
+ * @response 200 { success: true, data: ValidatorRow[] }
+ * @auth Bearer (admin role required)
+ */
+router.get('/validators', requireRole('admin'), listValidators);
 
 /**
  * POST /api/admin/validators/register

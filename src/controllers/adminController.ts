@@ -1,7 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { getEvents } from '../services/indexer';
+import jwt from 'jsonwebtoken';
+import { getEvents, insertValidator, revokeValidatorRow, getAllValidators } from '../services/indexer';
 import { AdminEvent, FeeHistoryItem, ApiResponse } from '../types';
+import { logAuditEvent } from '../services/audit';
 import config from '../config';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
@@ -70,6 +72,9 @@ export async function registerValidator(req: Request, res: Response, next: NextF
       return;
     }
 
+    // Persist the registration to the local validators table
+    insertValidator(validatorWallet);
+
     console.info(`[admin] action=register_validator admin=${adminWallet} target=${validatorWallet}`);
     // TODO: invoke register_validator on Soroban contract
     res.status(202).json({ success: true, message: `Validator ${validatorWallet} registration submitted` });
@@ -90,9 +95,22 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
       return;
     }
 
+    // Mark the validator as revoked in the local DB
+    revokeValidatorRow(validatorWallet);
+
     console.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet}`);
     // TODO: invoke revoke_validator on Soroban contract
     res.status(202).json({ success: true, message: `Validator ${validatorWallet} revocation submitted` });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** GET /api/admin/validators */
+export async function listValidators(req: Request, res: Response, next: NextFunction) {
+  try {
+    const validators = getAllValidators();
+    res.json({ success: true, data: validators });
   } catch (err) {
     next(err);
   }

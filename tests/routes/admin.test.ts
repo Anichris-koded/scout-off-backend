@@ -93,3 +93,66 @@ describe('POST /api/admin/validators/revoke', () => {
     expect(res.body.success).toBe(true);
   });
 });
+
+describe('GET /api/admin/validators', () => {
+  it('returns 401 with no token', async () => {
+    const res = await request(app).get('/api/admin/validators');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for non-admin role', async () => {
+    const token = await getToken('scout');
+    const res = await request(app)
+      .get('/api/admin/validators')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 200 with a data array for admin', async () => {
+    const token = await getToken('admin');
+    const res = await request(app)
+      .get('/api/admin/validators')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('includes a registered validator after registration', async () => {
+    const token = await getToken('admin');
+    // Register first
+    await request(app)
+      .post('/api/admin/validators/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: VALID_WALLET });
+    // Then list
+    const res = await request(app)
+      .get('/api/admin/validators')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    const found = res.body.data.find((v: any) => v.wallet === VALID_WALLET);
+    expect(found).toBeDefined();
+    expect(found.registered_at).toBeGreaterThan(0);
+    expect(found.revoked_at).toBeNull();
+  });
+
+  it('marks a validator as revoked after revocation', async () => {
+    const token = await getToken('admin');
+    // Register then revoke
+    await request(app)
+      .post('/api/admin/validators/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: VALID_WALLET });
+    await request(app)
+      .post('/api/admin/validators/revoke')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: VALID_WALLET });
+    const res = await request(app)
+      .get('/api/admin/validators')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    const found = res.body.data.find((v: any) => v.wallet === VALID_WALLET);
+    expect(found).toBeDefined();
+    expect(found.revoked_at).not.toBeNull();
+  });
+});

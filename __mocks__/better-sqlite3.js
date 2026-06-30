@@ -20,6 +20,23 @@ class Statement {
     } else if (sql.startsWith('INSERT INTO INDEXER_STATE') || sql.startsWith('INSERT OR REPLACE INTO INDEXER_STATE')) {
       const [key, value] = args;
       this._db._state.set(key, value);
+    } else if (sql.startsWith('INSERT OR REPLACE INTO VALIDATORS')) {
+      // args: wallet, registered_at, tx_hash
+      const [wallet, registered_at, tx_hash] = args;
+      const idx = this._db._validators.findIndex((v) => v.wallet === wallet);
+      if (idx >= 0) {
+        this._db._validators[idx] = { wallet, registered_at, revoked_at: null, tx_hash };
+      } else {
+        this._db._validators.push({ wallet, registered_at, revoked_at: null, tx_hash });
+      }
+    } else if (sql.startsWith('UPDATE VALIDATORS SET REVOKED_AT')) {
+      // args: revoked_at, tx_hash, wallet
+      const [revoked_at, tx_hash, wallet] = args;
+      const row = this._db._validators.find((v) => v.wallet === wallet);
+      if (row) {
+        row.revoked_at = revoked_at;
+        row.tx_hash = tx_hash;
+      }
     }
     return { changes: 1, lastInsertRowid: 0 };
   }
@@ -42,6 +59,9 @@ class Statement {
       }
       return [...this._db._events];
     }
+    if (sql.includes('FROM VALIDATORS')) {
+      return [...this._db._validators].sort((a, b) => b.registered_at - a.registered_at);
+    }
     return [];
   }
 }
@@ -50,6 +70,7 @@ class Database {
   constructor(_path) {
     this._events = [];
     this._state = new Map();
+    this._validators = [];
   }
 
   exec(_sql) {
