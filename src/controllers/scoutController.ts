@@ -388,7 +388,7 @@ export async function submitTrialOffer(req: Request, res: Response, next: NextFu
     const { wallet } = req.params;
     const { playerId, detailsUri } = req.body as { playerId: string; detailsUri: string };
 
-    if ((req as any).account !== wallet) {
+    if (req.account !== wallet) {
       logger.warn(`[scout] action=log_trial_offer_denied scout=${wallet} playerId=${playerId} reason=wallet_mismatch`);
       res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account', code: ErrorCode.WALLET_MISMATCH });
       return;
@@ -437,8 +437,8 @@ export async function getPaymentHistory(req: Request, res: Response, next: NextF
 
     let payments = getEvents('contact_unlocked')
       .filter((e) => e.payload.scout === wallet)
-      .map((e, i) => ({
-        transactionId: (e.payload.tx_hash ?? `mock-tx-${i}`) as string,
+      .map((e) => ({
+        transactionId: (e.payload.tx_hash as string | undefined) ?? null,
         amount: (e.payload.fee ?? '0') as string,
         token: 'XLM',
         timestamp: (e.payload.timestamp ?? new Date(0).toISOString()) as string,
@@ -494,4 +494,3 @@ export async function getContactDetails(req: Request, res: Response, next: NextF
     next(err);
   }
 }
-

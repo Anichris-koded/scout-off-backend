@@ -92,6 +92,9 @@ export interface PlayerMilestone {
 
 // ─── Scout ────────────────────────────────────────────────────────────────────
 
+/** Available scout subscription tiers. */
+export type SubscriptionTier = 'basic' | 'premium';
+
 export interface Scout {
   wallet: string;
   subscriptionExpiry?: number; // ledger timestamp; undefined = no active sub
@@ -101,6 +104,15 @@ export interface ContactUnlock {
   scout: string;
   playerId: string;
   unlockedAt: number;
+}
+
+/** A single entry in a scout's payment history. */
+export interface PaymentHistoryItem {
+  /** On-chain transaction hash, or null when unavailable. */
+  transactionId: string | null;
+  amount: string;
+  token: string;
+  timestamp: string;
 }
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
