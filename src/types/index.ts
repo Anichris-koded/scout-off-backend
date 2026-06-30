@@ -124,6 +124,8 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  code?: string;
+  correlationId?: string;
 }
 
 export interface PaginatedResponse<T> extends ApiResponse<T[]> {
@@ -185,4 +187,5 @@ export interface EventRecord {
   type: ContractEventType;
   payload: Record<string, unknown>;
   contractAddress: string;
+  created_at?: number | null;
 }

@@ -3,7 +3,6 @@ import { requireOwner, isOwner } from '../../src/middleware/requireOwner';
 
 function makeReqRes(account: string | undefined, playerId: string) {
   const req = { params: { playerId }, account } as unknown as Request;
-  (req as any).account = account;
   const res = {
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
