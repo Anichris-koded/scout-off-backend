@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { getEvents } from '../services/indexer';
 import { AdminEvent, FeeHistoryItem, ApiResponse } from '../types';
-
-const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
+import { STELLAR_ADDRESS_RE } from '../utils/validators';
 
 /** GET /api/admin/stats */
 export async function getStats(req: Request, res: Response, next: NextFunction) {
@@ -46,7 +45,7 @@ export async function getFeeSummary(req: Request, res: Response, next: NextFunct
 /** POST /api/admin/validators/register */
 export async function registerValidator(req: Request, res: Response, next: NextFunction) {
   try {
-    const adminWallet = (req as any).account as string;
+    const adminWallet = req.account;
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
@@ -66,7 +65,7 @@ export async function registerValidator(req: Request, res: Response, next: NextF
 /** POST /api/admin/validators/revoke */
 export async function revokeValidator(req: Request, res: Response, next: NextFunction) {
   try {
-    const adminWallet = (req as any).account as string;
+    const adminWallet = req.account;
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
