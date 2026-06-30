@@ -1,5 +1,7 @@
+import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { sanitizeInput } from "../utils/sanitizer";
+import { createId } from "@paralleldrive/cuid2";
 import { z } from "zod";
 import { CID_REGEX } from "../utils/cidValidator";
 import { pinJson } from "../services/ipfs";
@@ -9,16 +11,20 @@ import {
   getPlayerById,
   insertPlayerProfileHistory,
   queryPlayers,
+  countPlayers,
+  upsertPlayer,
 } from "../db";
 
 import { queryMilestones, updateProfile } from "../services/stellar";
-import { invalidatePlayerCache } from "../services/cache";
+import { cacheGet, cacheSet, invalidatePlayerCache } from "../services/cache";
 import { ApiResponse } from "../types";
+import { ErrorCode } from "../utils/errorCodes";
 import { getTierMeta } from "../utils/tier";
 import { validateMinTier } from "../utils/minTierValidator";
 import { normalizePosition } from "../utils/positionAliases";
 import { dispatchEventWebhook } from "../services/webhooks";
 import { enrichPlayerResult } from "../utils/searchEnrichment";
+import { recordAudit } from "../utils/audit";
 
 const baseRegistrationSchema = z.object({
   wallet: z.string().min(56).max(56),
@@ -42,9 +48,22 @@ export const filterSchema = z.object({
   region: z.string().optional(),
   position: z.string().optional(),
   minTier: z.coerce.number().int().min(0).max(3).optional(),
+  sortBy: z.enum(['tier', 'region']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).default('asc'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
+
+/**
+ * Returns the first player_registered event payload for the given playerId,
+ * or undefined if no such player exists.
+ */
+export function getPlayerById(playerId: string): Record<string, unknown> | undefined {
+  const events = getEvents('player_registered').filter(
+    (e) => e.payload.player_id === playerId
+  );
+  return events.length ? events[0].payload : undefined;
+}
 
 /** POST /api/players/register */
 export async function registerPlayer(
@@ -54,6 +73,14 @@ export async function registerPlayer(
 ) {
   try {
     const parsed = registerSchema.parse(req.body);
+
+    // Ensure the wallet in the request body belongs to the authenticated account.
+    // Without this check a player could register a profile under another player's address.
+    if (parsed.wallet !== (req as any).account) {
+      res.status(403).json({ success: false, error: 'wallet must match authenticated account' });
+      return;
+    }
+
     const sanitizedPosition = sanitizeInput(parsed.position);
     const sanitizedRegion = sanitizeInput(parsed.region);
     const metadataUri =
@@ -68,7 +95,21 @@ export async function registerPlayer(
 
     // Invalidate player search cache so new profile appears in results
     invalidatePlayerCache();
+
+    // Write to DB immediately so GET /players/:playerId returns 200 without
+    // waiting for the indexer to process the blockchain event (#282).
+    const playerId = createId();
+    upsertPlayer({
+      player_id: playerId,
+      wallet: parsed.wallet,
+      position: sanitizedPosition,
+      region: sanitizedRegion,
+      metadata_uri: metadataUri,
+      created_at: Math.floor(Date.now() / 1000),
+    });
+
     await dispatchEventWebhook("player_registered", {
+      player_id: playerId,
       wallet: parsed.wallet,
       position: sanitizedPosition,
       region: sanitizedRegion,
@@ -81,10 +122,10 @@ export async function registerPlayer(
       region: sanitizedRegion,
     });
     const body: ApiResponse<
-      typeof ipfsResult & { metadataUri: string; gatewayUrl: string }
+      typeof ipfsResult & { playerId: string; metadataUri: string; gatewayUrl: string }
     > = {
       success: true,
-      data: { ...ipfsResult, metadataUri, gatewayUrl: ipfsResult.uri },
+      data: { ...ipfsResult, playerId, metadataUri, gatewayUrl: ipfsResult.uri },
     };
     res.status(201).json(body);
   } catch (err) {
@@ -100,29 +141,42 @@ export async function getPlayer(
 ) {
   try {
     const playerId = sanitizeInput(req.params.playerId);
+    const cacheKey = `players:${playerId}`;
+    const cached = cacheGet<Record<string, unknown>>(cacheKey);
+    if (cached) {
+      res.json({ success: true, data: cached });
+      return;
+    }
     const row = getPlayerById(playerId);
     if (!row) {
-      res.status(404).json({ success: false, error: "Player not found" });
+      res.status(404).json({ success: false, error: "Player not found", code: ErrorCode.PLAYER_NOT_FOUND });
       return;
     }
     const { tierName, tierDescription } = getTierMeta(row.progress_level);
-    res.json({
-      success: true,
-      data: {
-        player_id: row.player_id,
-        wallet: row.wallet,
-        position: row.position,
-        region: row.region,
-        metadataUri: row.metadata_uri,
-        progress_level: row.progress_level,
-        created_at: row.created_at,
-        tierName,
-        tierDescription,
-      },
-    });
+    const data = {
+      player_id: row.player_id,
+      wallet: row.wallet,
+      position: row.position,
+      region: row.region,
+      metadataUri: row.metadata_uri,
+      progress_level: row.progress_level,
+      created_at: row.created_at,
+      tierName,
+      tierDescription,
+    };
+    cacheSet(cacheKey, data);
+    res.json({ success: true, data });
   } catch (err) {
     next(err);
   }
+}
+
+interface FilterPlayersResult {
+  data: Record<string, unknown>[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pages: number;
 }
 
 /** GET /api/players?region=&position=&minTier= */
@@ -134,7 +188,7 @@ export async function filterPlayers(
   try {
     const tierResult = validateMinTier(req.query.minTier);
     if (!tierResult.valid) {
-      res.status(400).json({ success: false, error: tierResult.error });
+      res.status(400).json({ success: false, error: tierResult.error, code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const minTier = tierResult.tier;
@@ -144,6 +198,20 @@ export async function filterPlayers(
     const normalizedPosition = sanitizedPosition
       ? normalizePosition(sanitizedPosition)
       : undefined;
+
+    const cacheKey = `players:list:${JSON.stringify({
+      region: sanitizedRegion ?? null,
+      position: normalizedPosition ?? sanitizedPosition ?? null,
+      minTier: minTier ?? null,
+      page,
+      pageSize,
+    })}`;
+
+    const cached = cacheGet<FilterPlayersResult>(cacheKey);
+    if (cached) {
+      res.json({ success: true, ...cached });
+      return;
+    }
 
     const rows = queryPlayers({
       region: sanitizedRegion,
@@ -170,6 +238,9 @@ export async function filterPlayers(
       ...enrichPlayerResult(row.progress_level),
     }));
 
+    const result: FilterPlayersResult = { data: enriched, total, page, pageSize, pages };
+    cacheSet(cacheKey, result);
+
     const scoutWallet = (req as any).account ?? 'anonymous';
     recordAudit(scoutWallet, 'player_search', {
       region: sanitizedRegion ?? null,
@@ -180,7 +251,7 @@ export async function filterPlayers(
       resultCount: total,
     });
 
-    res.json({ success: true, data: enriched, total, page, pageSize, pages });
+    res.json({ success: true, ...result });
   } catch (err) {
     next(err);
   }
@@ -214,6 +285,9 @@ export async function updatePlayer(
       tx_hash: result.transactionId,
     });
 
+    // Bust the single-player cache so the next GET reflects the update.
+    invalidatePlayerCache(playerId);
+
     res.status(200).json({
       success: true,
       data: {
@@ -245,6 +319,7 @@ export async function getPlayerMilestones(
       res.status(400).json({
         success: false,
         error: parsed.error.errors[0]?.message ?? "Invalid query parameters",
+        code: ErrorCode.VALIDATION_ERROR,
       });
       return;
     }

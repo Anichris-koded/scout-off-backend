@@ -15,6 +15,24 @@ async function getToken(role = 'scout'): Promise<string> {
 
 const WALLET = 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN';
 
+jest.mock('../../src/db', () => ({
+  getEvents: jest.fn(),
+  getPlayerById: jest.fn(),
+}));
+
+jest.mock('../../src/services/indexer', () => ({
+  indexEvents: jest.fn(),
+  normalizeEventId: jest.fn(),
+}));
+
+import { getEvents } from '../../src/db';
+const mockGetEvents = getEvents as jest.Mock;
+
+beforeEach(() => {
+  mockGetEvents.mockReset();
+  mockGetEvents.mockReturnValue([]);
+});
+
 describe('GET /api/scouts/:wallet/payments', () => {
   it('returns 401 without auth token', async () => {
     const res = await request(app).get(`/api/scouts/${WALLET}/payments`);
@@ -38,5 +56,76 @@ describe('GET /api/scouts/:wallet/payments', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('sets transactionId to null when tx_hash is missing from event payload', async () => {
+    mockGetEvents.mockReturnValue([
+      {
+        source: 'contract',
+        type: 'contact_unlocked',
+        contractAddress: 'contract',
+        payload: {
+          scout: WALLET,
+          fee: '1',
+          timestamp: '2024-06-01T00:00:00.000Z',
+          // no tx_hash field
+        },
+      },
+    ]);
+    const token = await getToken('scout');
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/payments`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].transactionId).toBeNull();
+  });
+
+  it('uses real tx_hash when present in event payload', async () => {
+    mockGetEvents.mockReturnValue([
+      {
+        source: 'contract',
+        type: 'contact_unlocked',
+        contractAddress: 'contract',
+        payload: {
+          scout: WALLET,
+          fee: '2',
+          timestamp: '2024-06-02T00:00:00.000Z',
+          tx_hash: 'abc123realHash',
+        },
+      },
+    ]);
+    const token = await getToken('scout');
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/payments`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].transactionId).toBe('abc123realHash');
+  });
+
+  it('never returns a transactionId matching /^mock-tx-/', async () => {
+    // Simulate multiple events without tx_hash to confirm no fabrication
+    mockGetEvents.mockReturnValue([
+      {
+        source: 'contract',
+        type: 'contact_unlocked',
+        contractAddress: 'contract',
+        payload: { scout: WALLET, fee: '1', timestamp: '2024-01-01T00:00:00.000Z' },
+      },
+      {
+        source: 'contract',
+        type: 'contact_unlocked',
+        contractAddress: 'contract',
+        payload: { scout: WALLET, fee: '2', timestamp: '2024-02-01T00:00:00.000Z' },
+      },
+    ]);
+    const token = await getToken('scout');
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/payments`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    for (const item of res.body.data) {
+      expect(item.transactionId).not.toMatch(/^mock-tx-/);
+    }
   });
 });

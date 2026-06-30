@@ -7,10 +7,30 @@ import { logger } from '../utils/logger';
 
 export interface AuthPayload extends jwt.JwtPayload, Partial<JwtPayload> {}
 
+/** Ordered list of secrets to try during verification. Current secret first. */
+function jwtSecrets(): string[] {
+  const secrets = [config.jwtSecret];
+  if (config.jwtSecretPrevious) secrets.push(config.jwtSecretPrevious);
+  return secrets;
+}
+
+/** Verify a token against the current secret, then the previous secret. */
+function verifyToken(token: string): AuthPayload {
+  const secrets = jwtSecrets();
+  for (const secret of secrets) {
+    try {
+      return jwt.verify(token, secret) as AuthPayload;
+    } catch {
+      // try next
+    }
+  }
+  throw new Error('Invalid or expired token');
+}
+
 /**
  * Middleware that verifies any valid JWT Bearer token.
  * Attaches `req.account` (Stellar public key) and `req.role` on success.
- * Returns 401 if the token is missing or invalid.
+ * Returns 401 if the token is missing, invalid, expired, or revoked.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
@@ -20,7 +40,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return;
   }
   try {
-    const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
+    const payload = verifyToken(header.slice(7));
     req.account = payload.sub;
     req.role = payload.role;
     next();
@@ -37,6 +57,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  *
  * Returns 401 if no valid token is present.
  * Returns 403 if the token's role does not match.
+ * All 401 and 403 responses are persisted to the audit trail.
  */
 export function requireRole(role: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -49,13 +70,13 @@ export function requireRole(role: string) {
 
     try {
       const token = header.slice(7);
-      const payload = jwt.verify(token, config.jwtSecret) as AuthPayload;
+      const payload = verifyToken(token);
 
       if (payload.role !== role) {
         logger.warn({
           method: req.method,
           path: req.path,
-          error: 'Insufficient permissions',
+          error: reason,
           requiredRole: role,
           providedRole: payload.role,
         });
@@ -81,7 +102,7 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
   const header = req.headers.authorization;
   if (header?.startsWith('Bearer ')) {
     try {
-      const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
+      const payload = verifyToken(header.slice(7));
       (req as any).account = payload.sub;
       (req as any).role = payload.role;
     } catch {
@@ -108,7 +129,7 @@ export function requireRoles(...roles: string[]) {
       return;
     }
     try {
-      const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
+      const payload = verifyToken(header.slice(7));
       if (!payload.role || !roles.includes(payload.role)) {
         sendForbidden(res, 'Insufficient permissions');
         return;

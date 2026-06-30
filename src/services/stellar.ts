@@ -1,7 +1,50 @@
-import { SorobanRpc, Networks } from '@stellar/stellar-sdk';
+import {
+  SorobanRpc,
+  Networks,
+  Contract,
+  TransactionBuilder,
+  BASE_FEE,
+  Keypair,
+  Account,
+  Address,
+  scValToNative,
+} from '@stellar/stellar-sdk';
 import config from '../config';
+import http from 'http';
+import https from 'https';
+import { logger } from '../utils/logger';
 
-const server = new SorobanRpc.Server(config.sorobanRpcUrl);
+// Configure HTTP keepalive agents for connection reuse
+const httpAgent = new http.Agent({ 
+  keepAlive: true,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: 60000,
+});
+
+const httpsAgent = new https.Agent({ 
+  keepAlive: true,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: 60000,
+});
+
+const server = new SorobanRpc.Server(config.sorobanRpcUrl, {
+  allowHttp: config.sorobanRpcUrl.startsWith('http://'),
+});
+
+// Configure the HTTP client to use keepalive agents
+// The SDK version 12.1.0 uses axios internally
+if (server.httpClient && typeof (server.httpClient as any).defaults === 'object') {
+  (server.httpClient as any).defaults.httpAgent = httpAgent;
+  (server.httpClient as any).defaults.httpsAgent = httpsAgent;
+  
+  // Log keepalive configuration for verification
+  if (config.nodeEnv === 'development' || config.nodeEnv === 'test') {
+    logger.info('[SorobanRPC] HTTP keepalive enabled with httpAgent and httpsAgent');
+    logger.info('[SorobanRPC] maxSockets: 50, maxFreeSockets: 10, timeout: 60000ms');
+  }
+}
 
 export { server };
 
@@ -46,8 +89,12 @@ export async function stellarHealth(): Promise<boolean> {
 }
 
 /**
- * Stub: check whether a scout has an active on-chain subscription.
- * Replace with a real Soroban `is_subscribed` contract call when ready.
+ * Check whether a scout has an active on-chain subscription by invoking
+ * `is_subscribed(scout)` on the Soroban contract via simulateTransaction.
+ *
+ * The contract function returns a plain bool; the expiry ledger is not
+ * exposed via this entry point, so expiresAt is '' for active and null
+ * for inactive/absent subscriptions.
  */
 export async function isSubscribed(
   scoutWallet: string,
@@ -55,8 +102,48 @@ export async function isSubscribed(
   if (!scoutWallet) {
     throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
   }
-  // TODO: invoke is_subscribed on the Soroban contract
-  return { active: false, expiresAt: null };
+
+  try {
+    const contract = new Contract(config.contractId);
+    // Use a random ephemeral keypair as the simulation source — no on-chain
+    // auth is required for this view-only call, and we never submit the tx.
+    const ephemeral = Keypair.random();
+    const sourceAccount = new Account(ephemeral.publicKey(), '0');
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: networkPassphrase(),
+    })
+      .addOperation(
+        contract.call('is_subscribed', Address.fromString(scoutWallet).toScVal()),
+      )
+      .setTimeout(30)
+      .build();
+
+    const simResult = await server.simulateTransaction(tx);
+
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new PaymentError(
+        `Contract simulation failed: ${simResult.error}`,
+        'NETWORK_ERROR',
+      );
+    }
+
+    const successSim = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const retval = successSim.result?.retval;
+    if (!retval) {
+      return { active: false, expiresAt: null };
+    }
+
+    const active = scValToNative(retval) as boolean;
+    return { active, expiresAt: active ? '' : null };
+  } catch (err) {
+    if (err instanceof PaymentError) throw err;
+    throw new PaymentError(
+      `RPC call failed: ${(err as Error).message}`,
+      'NETWORK_ERROR',
+    );
+  }
 }
 
 /**
@@ -202,6 +289,113 @@ export async function purchaseSubscription(
     expiresAt,
     status: 'active',
   };
+}
+
+/**
+ * Stub: invoke renew_subscription(scout, tier, duration) on the Soroban contract.
+ * Extends the existing expiry by `duration` days.
+ */
+export async function renewSubscription(
+  scoutWallet: string,
+  tier: SubscriptionTier,
+  duration: number,
+  currentExpiresAt: number,
+): Promise<SubscriptionResult> {
+  if (!scoutWallet) {
+    throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
+  }
+  // Renewal extends from the current expiry (or now, if already expired)
+  const now = Math.floor(Date.now() / 1000);
+  const base = currentExpiresAt > now ? currentExpiresAt : now;
+  const expiresAt = base + duration * 86400;
+  // TODO: build and submit renew_subscription (or re-call subscribe) Soroban transaction
+  return {
+    transactionId: `stub-renew-txid-${Date.now()}`,
+    tier,
+    expiresAt,
+    status: 'active',
+  };
+}
+
+/**
+ * Stub: invoke cancel_subscription(scout) on the Soroban contract.
+ * Records the cancellation intent on-chain.
+ */
+export async function cancelSubscriptionOnChain(
+  scoutWallet: string,
+): Promise<{ transactionId: string }> {
+  if (!scoutWallet) {
+    throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
+  }
+  // TODO: build and submit cancel_subscription Soroban transaction
+  return { transactionId: `stub-cancel-txid-${Date.now()}` };
+}
+
+export interface ContractActionResult {
+  transactionId: string;
+}
+
+export class ContractActionError extends Error {
+  constructor(
+    message: string,
+    public readonly code: 'CONTRACT_NOT_PAUSED' | 'CONTRACT_ALREADY_PAUSED' | 'NETWORK_ERROR' | 'UNAUTHORIZED',
+  ) {
+    super(message);
+    this.name = 'ContractActionError';
+  }
+}
+
+/**
+ * Invoke the contract's `unpause()` function via the platform keypair.
+ * Returns the transaction hash on success.
+ * Throws ContractActionError with code 'CONTRACT_NOT_PAUSED' if the simulation
+ * indicates the contract is not currently paused (Soroban error code 10).
+ */
+export async function unpauseContractOnChain(): Promise<ContractActionResult> {
+  const { getPlatformKeypair } = await import('../utils/signer');
+  const keypair = getPlatformKeypair();
+
+  const account = await server.getAccount(keypair.publicKey());
+  const contract = new Contract(config.contractId);
+
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: networkPassphrase(),
+  })
+    .addOperation(contract.call('unpause'))
+    .setTimeout(30)
+    .build();
+
+  const simResult = await server.simulateTransaction(tx);
+  if (SorobanRpc.Api.isSimulationError(simResult)) {
+    const errMsg = simResult.error ?? '';
+    if (errMsg.includes('ContractPaused') || errMsg.includes('contract_paused') || errMsg.includes('#10')) {
+      throw new ContractActionError('Contract is not currently paused', 'CONTRACT_NOT_PAUSED');
+    }
+    throw new ContractActionError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+  }
+
+  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+  preparedTx.sign(keypair);
+
+  const sendResult = await server.sendTransaction(preparedTx);
+  if (sendResult.status === 'ERROR') {
+    throw new ContractActionError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+  }
+
+  const hash = sendResult.hash;
+
+  let getResult = await server.getTransaction(hash);
+  while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+    await new Promise((r) => setTimeout(r, 1000));
+    getResult = await server.getTransaction(hash);
+  }
+
+  if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+    throw new ContractActionError('Transaction failed on-chain', 'NETWORK_ERROR');
+  }
+
+  return { transactionId: hash };
 }
 
 export interface UpdateProfileResult {

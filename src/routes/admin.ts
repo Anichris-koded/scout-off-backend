@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, reindex, getValidatorStatsEndpoint, getAuditLog } from '../controllers/adminController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
 
@@ -52,6 +52,17 @@ router.get('/events/export', requireRole('admin'), exportEvents);
 router.get('/fees', requireRole('admin'), getFeeSummary);
 
 /**
+ * GET /api/admin/audit
+ *
+ * Returns paginated audit log entries. Supports `startDate`, `endDate` (ISO 8601),
+ * `action` filters, and `limit`/`offset` pagination.
+ *
+ * @response 200 { success: true, data: AuditLogRow[], total, limit, offset }
+ * @auth Bearer (admin role required)
+ */
+router.get('/audit', requireRole('admin'), getAuditLog);
+
+/**
  * POST /api/admin/fees
  *
  * Withdraws accumulated platform fees from the Soroban contract to a specified recipient.
@@ -95,6 +106,7 @@ router.post('/validators/register', requireRole('admin'), registerValidator);
  * @auth Bearer (admin role required)
  */
 router.post('/validators/revoke', requireRole('admin'), revokeValidator);
+router.post('/contract/pause', requireRole('admin'), pauseContract);
 
 /**
  * POST /api/admin/contract/pause
@@ -147,5 +159,7 @@ router.post('/introspect', requireRole('admin'), introspectToken);
  * @auth Bearer (admin role required)
  */
 router.post('/indexer/reindex', requireRole('admin'), reindex);
+
+router.get('/validators/:wallet/stats', requireRole('admin'), getValidatorStatsEndpoint);
 
 export default router;

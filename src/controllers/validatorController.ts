@@ -2,10 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { logger } from '../utils/logger';
 import { pinJson } from '../services/ipfs';
-import { getEvents } from '../db';
+import { getPendingMilestones as getPendingMilestonesFromDb } from '../db';
 import { invalidateMilestoneCache } from '../services/cache';
 import { recordAudit } from '../utils/audit';
-import { PlayerMilestone } from '../types';
 
 /**
  * Validates that an evidence URI is secure and properly formatted.
@@ -25,7 +24,9 @@ export const milestoneSchema = z.object({
 
 export const pendingQuerySchema = z.object({
   region: z.string().optional(),
-  playerId: z.string().optional(),
+  position: z.string().optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
 });
 
 /** POST /api/validators/milestone */
@@ -54,28 +55,48 @@ export async function submitMilestoneEvidence(req: Request, res: Response, next:
   }
 }
 
-/** GET /api/validators/milestones/pending */
+/** GET /api/validators/milestones/pending or /api/validators/:wallet/milestones/pending */
 export async function getPendingMilestones(req: Request, res: Response, next: NextFunction) {
   try {
-    const { region, playerId } = pendingQuerySchema.parse(req.query);
-    const submitted = getEvents('milestone_submitted').map((e) => e.payload);
-    const approvedIds = new Set(
-      getEvents('milestone_approved').map((e) => e.payload.milestone_id)
-    );
-    let pending = submitted.filter((m) => !approvedIds.has(m.milestone_id));
-    if (region) pending = pending.filter((m) => m.region === region);
-    if (playerId) pending = pending.filter((m) => m.player_id === playerId);
-    const milestones: PlayerMilestone[] = pending.map((m) => ({
-      status: 'pending' as const,
-      approvedBy: m.validator as string || '',
-      submittedAt: m.created_at as number || Math.floor(Date.now() / 1000),
-      evidenceUri: m.evidence_uri as string || '',
+    const { region, position, page, pageSize } = pendingQuerySchema.parse(req.query);
+    const validatorWallet = req.params.wallet || req.account;
+    const { data, total } = getPendingMilestonesFromDb({
+      validatorWallet: validatorWallet,
+      region,
+      position,
+      page,
+      pageSize,
+    });
+
+    // Transform to the desired output format
+    const milestones = data.map((m) => ({
+      milestoneId: m.milestone_id,
+      playerId: m.player_id,
+      milestoneType: m.milestone_type,
+      evidenceUri: m.evidence_uri,
+      submittedAt: m.submitted_at,
     }));
 
-    const validatorWallet = req.account ?? 'unknown';
-    recordAudit(validatorWallet, 'milestone_approved', { region: region ?? null, playerId: playerId ?? null, pendingCount: milestones.length }, 'pending milestones viewed');
+    const currentValidatorWallet = req.account ?? 'unknown';
+    recordAudit(
+      currentValidatorWallet, 
+      'pending_milestones_viewed', 
+      { 
+        region: region ?? null, 
+        position: position ?? null,
+        validatorWallet,
+        pendingCount: total,
+      }, 
+      'pending milestones viewed'
+    );
 
-    res.json({ success: true, data: milestones });
+    res.json({ 
+      success: true, 
+      data: milestones, 
+      total, 
+      page: page || 1, 
+      pageSize: pageSize || 20 
+    });
   } catch (err) {
     next(err);
   }

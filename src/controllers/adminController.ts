@@ -1,12 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
-import { getEvents, getLastLedger, setLastLedger } from '../db';
-import { ApiResponse, EventRecord } from '../types';
+import { getEvents, getEventsCount, getLastLedger, setLastLedger, getValidatorStats } from '../db';
+import { ApiResponse, EventRecord, ContractEventType } from '../types';
 import { logAuditEvent } from '../services/audit';
-import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult } from '../services/stellar';
+import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, unpauseContractOnChain, ContractActionError } from '../services/stellar';
 import config from '../config';
 import { logger } from '../utils/logger';
+import { ErrorCode } from '../utils/errorCodes';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
@@ -32,6 +33,37 @@ const isoDateString = z
   .refine((v) => !isNaN(Date.parse(v)), { message: 'Must be a valid ISO 8601 date string' })
   .transform((v) => new Date(v));
 
+const auditQuerySchema = z.object({
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  action: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+/** GET /api/admin/audit */
+export async function getAuditLog(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = auditQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid query parameters' });
+      return;
+    }
+    const { startDate, endDate, action, limit, offset } = parsed.data;
+    const rows = getAuditLogs({ action, startDate, endDate, limit, offset });
+    const total = getAuditLogsCount({ action, startDate, endDate });
+    res.json({
+      success: true,
+      data: rows.map((r) => ({ ...r, query_params: JSON.parse(r.query_params) })),
+      total,
+      limit,
+      offset,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** Exported so routes can apply validateQuery(adminDateRangeSchema) */
 export const adminDateRangeSchema = z.object({
   startDate: isoDateString.optional(),
@@ -54,12 +86,12 @@ export async function getAllEvents(req: Request, res: Response, next: NextFuncti
   try {
     const dateResult = adminDateRangeSchema.safeParse(req.query);
     if (!dateResult.success) {
-      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters' });
+      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const pageResult = paginationSchema.safeParse(req.query);
     if (!pageResult.success) {
-      res.status(400).json({ success: false, error: pageResult.error.errors[0]?.message ?? 'Invalid pagination parameters' });
+      res.status(400).json({ success: false, error: pageResult.error.errors[0]?.message ?? 'Invalid pagination parameters', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const { startDate, endDate, eventType } = dateResult.data;
@@ -69,10 +101,8 @@ export async function getAllEvents(req: Request, res: Response, next: NextFuncti
 
     const eventTypeFilter = eventType as ContractEventType | undefined;
     let events = getEvents(eventTypeFilter, { limit, offset }) as unknown as EventRecord[];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (startDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) >= startDate!);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (endDate) events = events.filter((e: any) => new Date(e.timestamp ?? e.created_at ?? 0) <= endDate!);
+    if (startDate) events = events.filter((e) => new Date(e.created_at ?? 0) >= startDate!);
+    if (endDate) events = events.filter((e) => new Date(e.created_at ?? 0) <= endDate!);
 
     const total = getEventsCount(eventTypeFilter);
     res.json({ success: true, data: events, total, limit, offset });
@@ -86,7 +116,7 @@ export async function getFeeSummary(req: Request, res: Response, next: NextFunct
   try {
     const dateResult = adminDateRangeSchema.safeParse(req.query);
     if (!dateResult.success) {
-      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters' });
+      res.status(400).json({ success: false, error: dateResult.error.errors[0]?.message ?? 'Invalid query parameters', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const adminWallet = req.account ?? 'unknown';
@@ -112,7 +142,7 @@ export async function registerValidator(req: Request, res: Response, next: NextF
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
       logger.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
-      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
+      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
 
@@ -132,7 +162,7 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
 
     if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
       logger.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
-      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address' });
+      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
 
@@ -151,6 +181,17 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
 export async function pauseContract(req: Request, res: Response, next: NextFunction) {
   try {
     const adminWallet = req.account ?? 'unknown';
+    // Check if admin wallet is in allowed admin wallets
+    if (!config.adminWallets.includes(adminWallet)) {
+      res.status(403).json({ success: false, error: 'Insufficient permissions' });
+      return;
+    }
+    // Check threshold for high-value operations
+    if (config.adminThreshold > 1) {
+      // TODO: Implement multi-signature collection and verification
+      res.status(403).json({ success: false, error: 'High-value operation requires multiple admin signatures' });
+      return;
+    }
     logAuditEvent({
       action: 'contract_state_change',
       adminWallet,
@@ -171,11 +212,23 @@ export async function pauseContract(req: Request, res: Response, next: NextFunct
 
 /**
  * POST /api/admin/contract/unpause
- * Stub: signals intent to unpause the Soroban contract. Contract-level behavior is simulated.
+ * Invokes unpause() on the Soroban contract via the platform keypair.
+ * Returns 409 if the contract is not currently paused.
  */
 export async function unpauseContract(req: Request, res: Response, next: NextFunction) {
   try {
     const adminWallet = req.account ?? 'unknown';
+    // Check if admin wallet is in allowed admin wallets
+    if (!config.adminWallets.includes(adminWallet)) {
+      res.status(403).json({ success: false, error: 'Insufficient permissions' });
+      return;
+    }
+    // Check threshold for high-value operations
+    if (config.adminThreshold > 1) {
+      // TODO: Implement multi-signature collection and verification
+      res.status(403).json({ success: false, error: 'High-value operation requires multiple admin signatures' });
+      return;
+    }
     logAuditEvent({
       action: 'contract_state_change',
       adminWallet,
@@ -183,13 +236,27 @@ export async function unpauseContract(req: Request, res: Response, next: NextFun
       timestamp: new Date().toISOString(),
       contractAction: 'unpause_contract',
     });
-    // NOTE: Contract-level unpause is simulated. Real invocation will call unpause() on the Soroban contract.
+
+    const result = await unpauseContractOnChain();
+
+    logAuditEvent({
+      action: 'contract_state_change',
+      adminWallet,
+      queryParams: { transactionId: result.transactionId, outcome: 'success' },
+      timestamp: new Date().toISOString(),
+      contractAction: 'unpause_contract',
+    });
+
     res.status(202).json({
       success: true,
-      message: 'Contract unpause submitted (simulated)',
-      transactionId: 'stub-unpause-txn-placeholder',
+      message: 'Contract unpaused successfully',
+      transactionId: result.transactionId,
     });
   } catch (err) {
+    if (err instanceof Error && (err as { code?: string }).code === 'CONTRACT_NOT_PAUSED') {
+      res.status(409).json({ success: false, error: 'Contract is not currently paused', code: ErrorCode.CONFLICT });
+      return;
+    }
     next(err);
   }
 }
@@ -203,7 +270,7 @@ export async function introspectToken(req: Request, res: Response, next: NextFun
   try {
     const parsed = introspectSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.errors[0].message });
+      res.status(400).json({ success: false, error: parsed.error.errors[0].message, code: ErrorCode.VALIDATION_ERROR });
       return;
     }
 
@@ -211,7 +278,7 @@ export async function introspectToken(req: Request, res: Response, next: NextFun
     try {
       payload = jwt.verify(parsed.data.token, config.jwtSecret) as jwt.JwtPayload;
     } catch {
-      res.status(400).json({ success: false, error: 'Invalid or expired token' });
+      res.status(400).json({ success: false, error: 'Invalid or expired token', code: ErrorCode.TOKEN_INVALID });
       return;
     }
 
@@ -258,11 +325,22 @@ export function setWithdrawalLockForTesting(): void {
 export async function withdrawFeesController(req: Request, res: Response, next: NextFunction) {
   // Controller-level role guard (defence-in-depth in addition to the route middleware).
   if (req.role !== 'admin') {
-    res.status(403).json({ success: false, error: 'Insufficient permissions' });
+    res.status(403).json({ success: false, error: 'Insufficient permissions', code: ErrorCode.FORBIDDEN });
     return;
   }
 
   const adminWallet = req.account ?? 'unknown';
+  // Check if admin wallet is in allowed admin wallets
+  if (!config.adminWallets.includes(adminWallet)) {
+    res.status(403).json({ success: false, error: 'Insufficient permissions' });
+    return;
+  }
+  // Check threshold for high-value operations
+  if (config.adminThreshold > 1) {
+    // TODO: Implement multi-signature collection and verification
+    res.status(403).json({ success: false, error: 'High-value operation requires multiple admin signatures' });
+    return;
+  }
   const parsed = withdrawFeesSchema.safeParse(req.body);
 
   if (!parsed.success) {
@@ -272,7 +350,7 @@ export async function withdrawFeesController(req: Request, res: Response, next: 
       queryParams: { error: 'validation_failed', reason: parsed.error.errors[0]?.message },
       timestamp: new Date().toISOString(),
     });
-    res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body' });
+    res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body', code: ErrorCode.VALIDATION_ERROR });
     return;
   }
 
@@ -287,7 +365,7 @@ export async function withdrawFeesController(req: Request, res: Response, next: 
       timestamp: new Date().toISOString(),
       contractAction: 'withdraw_fees',
     });
-    res.status(409).json({ success: false, error: 'A withdrawal is already in progress' });
+    res.status(409).json({ success: false, error: 'A withdrawal is already in progress', code: ErrorCode.CONFLICT });
     return;
   }
 
@@ -339,16 +417,16 @@ export async function withdrawFeesController(req: Request, res: Response, next: 
     if (err instanceof FeeWithdrawalError) {
       switch (err.code) {
         case 'NO_FEES':
-          res.status(409).json({ success: false, error: 'No fees available to withdraw' });
+          res.status(409).json({ success: false, error: 'No fees available to withdraw', code: ErrorCode.NO_FEES });
           return;
         case 'CONTRACT_PAUSED':
-          res.status(409).json({ success: false, error: 'Contract is paused; withdrawal not available' });
+          res.status(409).json({ success: false, error: 'Contract is paused; withdrawal not available', code: ErrorCode.CONTRACT_PAUSED });
           return;
         case 'INVALID_RECIPIENT':
-          res.status(400).json({ success: false, error: 'Invalid recipient address' });
+          res.status(400).json({ success: false, error: 'Invalid recipient address', code: ErrorCode.INVALID_RECIPIENT });
           return;
         case 'NETWORK_ERROR':
-          res.status(503).json({ success: false, error: 'Network error; please retry' });
+          res.status(503).json({ success: false, error: 'Network error; please retry', code: ErrorCode.NETWORK_ERROR });
           return;
       }
     }
@@ -363,6 +441,43 @@ const reindexSchema = z.object({
 });
 
 /**
+ * GET /api/admin/validators/:wallet/stats
+ * Returns validator stats: milestones_approved and milestones_rejected.
+ */
+export async function getValidatorStatsEndpoint(req: Request, res: Response, next: NextFunction) {
+  try {
+    const wallet = req.params.wallet;
+    // Validate wallet address
+    if (!STELLAR_ADDRESS_RE.test(wallet)) {
+      res.status(400).json({ success: false, error: 'Invalid validator wallet address' });
+      return;
+    }
+    const stats = getValidatorStats(wallet);
+    if (stats) {
+      res.json({
+        success: true,
+        data: {
+          wallet: stats.wallet,
+          milestones_approved: stats.milestones_approved,
+          milestones_rejected: stats.milestones_rejected
+        }
+      });
+    } else {
+      res.json({
+        success: true,
+        data: {
+          wallet,
+          milestones_approved: 0,
+          milestones_rejected: 0
+        }
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * POST /api/admin/indexer/reindex
  * Resets the indexer's last_ledger to fromLedger so the next poll replays from that point.
  */
@@ -370,13 +485,64 @@ export async function reindex(req: Request, res: Response, next: NextFunction) {
   try {
     const parsed = reindexSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'fromLedger must be a non-negative integer' });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'fromLedger must be a non-negative integer', code: ErrorCode.VALIDATION_ERROR });
       return;
     }
     const { fromLedger } = parsed.data;
     const previous = getLastLedger();
     setLastLedger(fromLedger);
     res.json({ success: true, data: { fromLedger, previous } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const updatePlatformFeeSchema = z.object({
+  platformFeeBps: z.number().int().min(0).max(10000), // 0-100% in basis points
+});
+
+/**
+ * POST /api/admin/platform-fee
+ * Update platform fee configuration on-chain
+ */
+export async function updatePlatformFee(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (req.role !== 'admin') {
+      res.status(403).json({ success: false, error: 'Insufficient permissions' });
+      return;
+    }
+
+    const adminWallet = req.account ?? 'unknown';
+    const parsed = updatePlatformFeeSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      logAuditEvent({
+        action: 'platform_fee_update_attempt',
+        adminWallet,
+        queryParams: { error: 'validation_failed', reason: parsed.error.errors[0]?.message },
+        timestamp: new Date().toISOString(),
+      });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body' });
+      return;
+    }
+
+    const { platformFeeBps } = parsed.data;
+
+    logger.info(`[admin] action=update_platform_fee admin=${adminWallet} platformFeeBps=${platformFeeBps}`);
+    logAuditEvent({
+      action: 'platform_fee_update_attempt',
+      adminWallet,
+      queryParams: { platformFeeBps, outcome: 'submitted' },
+      timestamp: new Date().toISOString(),
+      contractAction: 'set_platform_fee_bps',
+    });
+
+    // NOTE: Contract-level update is simulated. Real invocation will call set_platform_fee_bps() on the Soroban contract.
+    res.status(202).json({
+      success: true,
+      message: `Platform fee update to ${platformFeeBps} bps submitted (simulated)`,
+      transactionId: 'stub-platform-fee-txn-placeholder',
+    });
   } catch (err) {
     next(err);
   }

@@ -18,6 +18,9 @@ jest.mock('../../src/services/stellar', () => ({
   submitContactPayment: jest.fn(),
   purchaseSubscription: jest.fn(),
   isSubscribed: jest.fn().mockResolvedValue({ active: false, expiresAt: null }),
+  renewSubscription: jest.fn(),
+  cancelSubscriptionOnChain: jest.fn(),
+  logTrialOffer: jest.fn(),
   PaymentError: class PaymentError extends Error {
     constructor(public message: string, public code: string) { super(message); }
   },
@@ -28,6 +31,7 @@ import { submitContactPayment, purchaseSubscription, isSubscribed, logTrialOffer
 const mockGetEvents = getEvents as jest.Mock;
 const mockGetPlayerById = getPlayerById as jest.Mock;
 const mockSubmitContactPayment = submitContactPayment as jest.Mock;
+const mockPurchaseSubscription = purchaseSubscription as jest.Mock;
 const mockIsSubscribed = isSubscribed as jest.Mock;
 const mockLogTrialOffer = logTrialOffer as jest.Mock;
 const mockPurchaseSubscription = purchaseSubscription as jest.Mock;
@@ -50,6 +54,38 @@ beforeEach(() => {
   mockGetEvents.mockReset();
   mockGetPlayerById.mockReset();
   mockIsSubscribed.mockReset().mockResolvedValue({ active: false, expiresAt: null });
+  // Ensure getLatestSubscription returns null by default
+  const { getLatestSubscription } = require('../../src/db');
+  (getLatestSubscription as jest.Mock).mockReset().mockReturnValue(null);
+});
+
+// ─── Wallet address validation ─────────────────────────────────────────────────
+
+describe('wallet address validation', () => {
+  it('returns 400 for an invalid wallet in GET subscription', async () => {
+    const res = await request(app)
+      .get('/api/scouts/not-a-valid-address/subscription')
+      .set('Authorization', `Bearer ${makeToken(WALLET)}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, error: 'Invalid Stellar address' });
+  });
+
+  it('returns 400 for an invalid wallet in GET contacts', async () => {
+    const res = await request(app)
+      .get('/api/scouts/not-a-valid-address/contacts')
+      .set('Authorization', `Bearer ${makeToken(WALLET)}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, error: 'Invalid Stellar address' });
+  });
+
+  it('returns 400 for an invalid wallet in GET payments', async () => {
+    mockGetEvents.mockReturnValue([]);
+    const res = await request(app)
+      .get('/api/scouts/not-a-valid-address/payments')
+      .set('Authorization', `Bearer ${makeToken(WALLET)}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, error: 'Invalid Stellar address' });
+  });
 });
 
 // ─── GET /api/scouts/:wallet/subscription ─────────────────────────────────────
@@ -77,7 +113,7 @@ describe('GET /api/scouts/:wallet/subscription', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.data).toEqual({ active: false, tier: null, expiresAt: null, remainingDays: 0 });
+    expect(res.body.data).toEqual({ active: false, tier: null, expiresAt: null, remainingDays: 0, gracePeriodActive: false });
   });
 
   it('returns active subscription with correct fields', async () => {
@@ -100,6 +136,54 @@ describe('GET /api/scouts/:wallet/subscription', () => {
     expect(res.body.data.tier).toBe('pro');
     expect(res.body.data.expiresAt).toBe(expiresAt);
     expect(res.body.data.remainingDays).toBeGreaterThan(0);
+  });
+
+  it('returns 400 for invalid duration values on subscribe endpoint', async () => {
+    const token = makeToken(WALLET);
+
+    let res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 0 });
+    expect(res.status).toBe(400);
+
+    res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: -5 });
+    expect(res.status).toBe(400);
+
+    res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 366 });
+    expect(res.status).toBe(400);
+
+    res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 2.5 });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts 1 and 365 duration values for subscribe endpoint', async () => {
+    const token = makeToken(WALLET);
+
+    let res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.duration).toBe(1);
+
+    res = await request(app)
+      .post(`/api/scouts/${WALLET}/subscribe`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ duration: 365 });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.duration).toBe(365);
   });
 
   it('returns expired subscription as inactive with 0 remainingDays', async () => {
@@ -136,6 +220,44 @@ describe('GET /api/scouts/:wallet/subscription', () => {
       .get(`/api/scouts/${WALLET}/subscription`)
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
+    expect(res.body.data.tier).toBe('basic');
+  });
+
+  it('returns tier:"premium" for a premium subscriber', async () => {
+    const expiresAt = Math.floor(Date.now() / 1000) + 86400 * 30;
+    mockGetEvents.mockReturnValue([
+      {
+        source: 'contract',
+        type: 'scout_subscribed',
+        contractAddress: 'contract',
+        payload: { scout: WALLET, subscriptionExpiry: expiresAt, tier: 'premium' },
+      },
+    ]);
+    const token = makeToken(WALLET);
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/subscription`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.active).toBe(true);
+    expect(res.body.data.tier).toBe('premium');
+  });
+
+  it('returns tier:"basic" for an explicit basic subscriber', async () => {
+    const expiresAt = Math.floor(Date.now() / 1000) + 86400 * 7;
+    mockGetEvents.mockReturnValue([
+      {
+        source: 'contract',
+        type: 'scout_subscribed',
+        contractAddress: 'contract',
+        payload: { scout: WALLET, subscriptionExpiry: expiresAt, tier: 'basic' },
+      },
+    ]);
+    const token = makeToken(WALLET);
+    const res = await request(app)
+      .get(`/api/scouts/${WALLET}/subscription`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.active).toBe(true);
     expect(res.body.data.tier).toBe('basic');
   });
 });

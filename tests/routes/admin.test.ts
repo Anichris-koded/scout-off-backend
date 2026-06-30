@@ -25,6 +25,20 @@ describe('Security headers', () => {
     expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['referrer-policy']).toBeDefined();
   });
+
+  it('sets helmet cross-origin headers on all responses', async () => {
+    const res = await request(app).get('/health');
+    // Helmet-provided headers absent from the custom middleware
+    expect(res.headers['cross-origin-opener-policy']).toBeDefined();
+    expect(res.headers['cross-origin-resource-policy']).toBeDefined();
+    expect(res.headers['x-permitted-cross-domain-policies']).toBeDefined();
+    expect(res.headers['x-dns-prefetch-control']).toBeDefined();
+  });
+
+  it('does not expose x-powered-by header', async () => {
+    const res = await request(app).get('/health');
+    expect(res.headers['x-powered-by']).toBeUndefined();
+  });
 });
 
 // ─── Admin validator registry ─────────────────────────────────────────────────

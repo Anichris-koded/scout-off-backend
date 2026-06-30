@@ -15,8 +15,13 @@ Copy `.env.example` to `.env` and fill in all required values before starting th
 | `DB_PATH` | — | SQLite file path (default: `scout-off.db`) |
 | `PORT` | — | API port (default: `4000`) |
 | `LOG_LEVEL` | — | `debug` / `info` / `warn` / `error` |
+| `LOG_SKIP_PATHS` | — | Comma-separated paths requestLogger silences (default: health + metrics probes) |
+| `LOG_SAMPLE_RATE` | — | Float 0–1 sample rate for non-skipped paths (default: `1` = log all) |
 | `STELLAR_HEALTH_CHECK_ENABLED` | — | Set `false` in staging to skip Stellar RPC check |
 | `TRUSTED_PROXY_COUNT` | — | Number of trusted reverse proxies (default: `1`) |
+| `ADMIN_WALLET` | — | Single admin wallet address (for backward compatibility) |
+| `ADMIN_WALLETS` | — | Comma-separated list of admin wallet addresses (e.g., `GABC...,GDEF...`) |
+| `ADMIN_THRESHOLD` | — | Number of admin signatures required for high-value operations (default: `1`) |
 
 ## Build & Start
 
@@ -43,6 +48,84 @@ sqlite3 scout-off.db < db/002_your_migration.sql
 
 Always back up the database file before running migrations in production.
 
+## Database Backups
+
+The `scripts/backup-db.sh` script copies the SQLite file to a timestamped backup location.
+It supports local paths, AWS S3, and Google Cloud Storage.
+
+### Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `DB_PATH` | — | Path to the SQLite file (default: `scout-off.db`) |
+| `BACKUP_DEST` | ✅ | Backup destination — local path, `s3://…`, or `gs://…` |
+
+### One-off backup
+
+```bash
+# Local
+DB_PATH=/data/scout-off.db BACKUP_DEST=/var/backups/scout-off bash scripts/backup-db.sh
+
+# AWS S3 (requires aws CLI and credentials in environment)
+DB_PATH=/data/scout-off.db BACKUP_DEST=s3://my-bucket/scout-off-backups bash scripts/backup-db.sh
+
+# Google Cloud Storage (requires gsutil / gcloud SDK)
+DB_PATH=/data/scout-off.db BACKUP_DEST=gs://my-bucket/scout-off-backups bash scripts/backup-db.sh
+```
+
+The script exits with code `1` and prints an error to stderr on any failure (file missing, CLI not found, copy error).
+
+### Scheduling via cron
+
+Add an entry to `/etc/cron.d/scout-off-backup` (runs hourly):
+
+```cron
+0 * * * * ubuntu DB_PATH=/data/scout-off.db BACKUP_DEST=s3://my-bucket/scout-off-backups bash /opt/scout-off/scripts/backup-db.sh >> /var/log/scout-off-backup.log 2>&1
+```
+
+Or as a systemd timer (`/etc/systemd/system/scout-off-backup.timer`):
+
+```ini
+[Unit]
+Description=ScoutOff database backup
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+With a companion service (`/etc/systemd/system/scout-off-backup.service`):
+
+```ini
+[Unit]
+Description=ScoutOff database backup
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/scout-off.env
+ExecStart=/bin/bash /opt/scout-off/scripts/backup-db.sh
+```
+
+Enable with:
+
+```bash
+systemctl enable --now scout-off-backup.timer
+```
+
+### Backup retention
+
+The script does not manage retention. Use your cloud provider's lifecycle policies or a tool like `find` for local pruning:
+
+```bash
+# Delete local backups older than 7 days
+find /var/backups/scout-off -name '*.db' -mtime +7 -delete
+```
+
+For S3, configure an [Object Lifecycle rule](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html) to expire objects after your desired retention window.
+
 ## CI/CD Expectations
 
 - CI runs on every push via `.github/workflows/ci.yml`
@@ -64,6 +147,19 @@ Recommended metrics to track:
 - HTTP 5xx error rate
 - Event indexer lag (gap between latest on-chain event and last indexed event)
 - SQLite file size growth
+
+## Multi-Sig Admin Operations
+
+High-value admin operations (withdraw fees, pause/unpause contract) require M-of-N multi-signature approval:
+
+1. **Configure admin wallets**: Set `ADMIN_WALLETS` to a comma-separated list of Stellar addresses (e.g., `ADMIN_WALLETS=GABC123...,GDEF456...`)
+2. **Set threshold**: Configure `ADMIN_THRESHOLD` to the minimum number of admin signatures required (e.g., `ADMIN_THRESHOLD=2`)
+3. **Backward compatibility**: If `ADMIN_WALLETS` is not set, the system falls back to `ADMIN_WALLET` with threshold 1
+4. **Operations affected**:
+   - `POST /api/admin/fees` (withdraw fees)
+   - `POST /api/admin/contract/pause`
+   - `POST /api/admin/contract/unpause`
+5. **Single-signer attempts**: When threshold > 1, single-admin attempts return 403 with "High-value operation requires multiple admin signatures"
 
 ## Smoke Tests After Deployment
 

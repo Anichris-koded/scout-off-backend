@@ -16,17 +16,21 @@ import {
   updatePlayerSchema,
 } from "../controllers/playerController";
 import { getPlayerHistory } from "../controllers/playerHistoryController";
+import { acceptTrialOffer, rejectTrialOffer, rejectOfferSchema } from "../controllers/trialOfferController";
 
 import { validateBody, validateQuery } from "../middleware/validate";
-import { requireRole } from "../middleware/auth";
+import { requireRole, optionalAuth } from "../middleware/auth";
 import { requireOwner } from "../middleware/requireOwner";
 
 const router = Router();
 
+const playerIdParams = z.object({ playerId: playerIdSchema });
+
 /**
  * GET /api/players
+ * optionalAuth so req.account is set when a Bearer token is present (for audit logging)
  */
-router.get("/", validateQuery(filterSchema), filterPlayers);
+router.get("/", optionalAuth, validateQuery(filterSchema), filterPlayers);
 
 router.post(
   "/register",
@@ -59,6 +63,46 @@ router.get(
     }
     return requireRole("player")(req, res, () => requireOwner(req, res, next));
   },
+);
+
+/**
+ * POST /api/players/:playerId/trial-offers/:offerId/accept
+ *
+ * Accept a trial offer. Only the player who owns this playerId may respond.
+ *
+ * @param playerId {string} - The player's on-chain identifier
+ * @param offerId  {string} - The trial offer identifier
+ * @response 200 { success: true, data: { offerId, playerId, status: 'accepted', respondedAt } }
+ * @response 403 { success: false, error: string } - Not the offer's target player
+ * @response 404 { success: false, error: string } - Offer not found
+ * @response 409 { success: false, error: string } - Offer already responded to
+ * @auth Bearer (player role required)
+ */
+router.post(
+  "/:playerId/trial-offers/:offerId/accept",
+  requireRole("player"),
+  acceptTrialOffer,
+);
+
+/**
+ * POST /api/players/:playerId/trial-offers/:offerId/reject
+ *
+ * Reject a trial offer with an optional reason. Only the player who owns this playerId may respond.
+ *
+ * @param playerId {string} - The player's on-chain identifier
+ * @param offerId  {string} - The trial offer identifier
+ * @body { reason?: string } - Optional rejection reason (max 500 chars)
+ * @response 200 { success: true, data: { offerId, playerId, status: 'rejected', reason, respondedAt } }
+ * @response 403 { success: false, error: string } - Not the offer's target player
+ * @response 404 { success: false, error: string } - Offer not found
+ * @response 409 { success: false, error: string } - Offer already responded to
+ * @auth Bearer (player role required)
+ */
+router.post(
+  "/:playerId/trial-offers/:offerId/reject",
+  requireRole("player"),
+  validateBody(rejectOfferSchema),
+  rejectTrialOffer,
 );
 
 export default router;
