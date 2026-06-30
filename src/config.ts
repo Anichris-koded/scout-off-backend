@@ -1,25 +1,48 @@
 import dotenv from 'dotenv';
-import { z } from 'zod';
 dotenv.config();
 
-const ConfigSchema = z.object({
-  port: z.coerce.number().default(4000),
-  network: z.enum(['testnet', 'mainnet']).default('testnet'),
-  networkPassphrase: z.string().default('Test SDF Network ; September 2015'),
-  horizonUrl: z.string().url().default('https://horizon-testnet.stellar.org'),
-  sorobanRpcUrl: z.string().url().default('https://soroban-testnet.stellar.org'),
-  contractId: z.string().min(1),
-  jwtSecret: z.string().min(1),
-  pinata: z.object({
-    apiKey: z.string().default(''),
-    secret: z.string().default(''),
-    gateway: z.string().url().default('https://gateway.pinata.cloud'),
-  }),
-  platformFeeBps: z.coerce.number().default(500),
-  dbPath: z.string().default('scout-off.db'),
-});
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+type NodeEnv = 'development' | 'test' | 'staging' | 'production';
+
+const VALID_ENVS: ReadonlySet<string> = new Set(['development', 'test', 'staging', 'production']);
+
+const rawNodeEnv = process.env.NODE_ENV ?? 'development';
+if (!VALID_ENVS.has(rawNodeEnv)) {
+  throw new Error(`Invalid NODE_ENV: "${rawNodeEnv}". Must be one of: ${[...VALID_ENVS].join(', ')}`);
+}
+const nodeEnv = rawNodeEnv as NodeEnv;
+
+// Validate ADMIN_WALLET based on environment:
+// - production: throw immediately so the process never starts without it
+// - staging: emit a console warning (process continues)
+const adminWalletValue = process.env.ADMIN_WALLET ?? '';
+if (!adminWalletValue) {
+  if (nodeEnv === 'production') {
+    throw new Error('ADMIN_WALLET is required in production but is not set. Set the ADMIN_WALLET environment variable to the platform admin Stellar address.');
+  }
+  if (nodeEnv === 'staging') {
+    // eslint-disable-next-line no-console
+    console.warn('[config] WARNING: ADMIN_WALLET is not set in staging. Admin-seeding will be disabled. Set ADMIN_WALLET to suppress this warning.');
+  }
+}
+
+const ENV_LOG_LEVEL: Record<NodeEnv, LogLevel> = {
+  development: 'debug',
+  test: 'warn',
+  staging: 'info',
+  production: 'warn',
+};
 
 const config = {
+  nodeEnv,
   port: parseInt(process.env.PORT ?? '4000', 10),
   network: (process.env.NETWORK ?? 'testnet') as 'testnet' | 'mainnet',
   networkPassphrase:
@@ -30,32 +53,90 @@ const config = {
     process.env.SOROBAN_RPC_URL ?? 'https://soroban-testnet.stellar.org',
   contractId: required('CONTRACT_ID'),
   jwtSecret: required('JWT_SECRET'),
+  platformSecret: process.env.PLATFORM_SECRET ?? '',
   pinata: {
     apiKey: process.env.PINATA_API_KEY ?? '',
     secret: process.env.PINATA_SECRET ?? '',
     gateway: process.env.PINATA_GATEWAY ?? 'https://gateway.pinata.cloud',
+    gateways: (process.env.IPFS_GATEWAYS || '').split(',').map(g => g.trim()).filter(Boolean) || [
+      'https://gateway.pinata.cloud',
+      'https://cloudflare-ipfs.com',
+      'https://ipfs.io',
+    ],
   },
   platformFeeBps: parseInt(process.env.PLATFORM_FEE_BPS ?? '500', 10),
+  platformSecret: process.env.PLATFORM_SECRET ?? '',
+  platformSecretKey: (() => {
+    const isTest = (process.env.NODE_ENV ?? 'development') === 'test';
+    const val = process.env.PLATFORM_SECRET_KEY ?? '';
+    if (!val && !isTest) {
+      throw new Error('PLATFORM_SECRET_KEY is required in non-test environments');
+    }
+    return val;
+  })(),
   dbPath: process.env.DB_PATH ?? 'scout-off.db',
-  logLevel: (process.env.LOG_LEVEL ?? 'info') as 'debug' | 'info' | 'warn' | 'error',
   stellarHealthCheckEnabled: process.env.STELLAR_HEALTH_CHECK !== 'false',
   adminWallet: process.env.ADMIN_WALLET ?? '',
+  adminWallets: (process.env.ADMIN_WALLETS ?? process.env.ADMIN_WALLET ?? '').split(',').map(w => w.trim()).filter(w => w.length > 0),
+  adminThreshold: parseInt(process.env.ADMIN_THRESHOLD ?? '1', 10),
   securityHeaders: {
     hsts: process.env.SECURITY_HSTS ?? 'max-age=31536000; includeSubDomains',
     xContentTypeOptions: process.env.SECURITY_X_CONTENT_TYPE_OPTIONS ?? 'nosniff',
     xFrameOptions: process.env.SECURITY_X_FRAME_OPTIONS ?? 'DENY',
     referrerPolicy: process.env.SECURITY_REFERRER_POLICY ?? 'no-referrer',
+    /** Content-Security-Policy value. Override via SECURITY_CSP env var. */
+    csp: process.env.SECURITY_CSP ?? "default-src 'none'",
   },
-  logLevel: (process.env.LOG_LEVEL ?? 'info') as 'debug' | 'info' | 'warn' | 'error',
   webhook: {
     enabled: process.env.WEBHOOK_ENABLED === 'true',
-    url: process.env.WEBHOOK_URL ?? ''
+    url: process.env.WEBHOOK_URL ?? '',
   },
   rateLimit: {
-    enabled: process.env.RATE_LIMIT_ENABLED === 'true',
+    enabled: process.env.RATE_LIMIT_ENABLED !== 'false',
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? '60000', 10),
-    max: parseInt(process.env.RATE_LIMIT_MAX ?? '60', 10),
+    max: parseInt(process.env.RATE_LIMIT_MAX ?? (process.env.NODE_ENV === 'test' ? '1000' : '60'), 10),
   },
+  authRateLimit: {
+    windowMs: parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? '60000', 10),
+    max: parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? (process.env.NODE_ENV === 'test' ? '1000' : '5'), 10),
+  },
+  bodyLimit: {
+    // Maximum JSON payload size (default: 1MB)
+    json: process.env.JSON_PAYLOAD_LIMIT ?? '1mb',
+  },
+  allowedOrigins: process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+    : [],
+  logLevel: (process.env.LOG_LEVEL ?? ENV_LOG_LEVEL[nodeEnv]) as LogLevel,
+  showErrorDetails: nodeEnv === 'development' || nodeEnv === 'test',
+  useMockServices: nodeEnv === 'development' || nodeEnv === 'test',
+  backfillFromLedger: process.env.INDEXER_BACKFILL_FROM_LEDGER
+    ? parseInt(process.env.INDEXER_BACKFILL_FROM_LEDGER, 10)
+    : null,
+  /** Subscription grace period in hours after expiry during which access is still granted. */
+  subscriptionGracePeriodHours: parseInt(
+    process.env.SUBSCRIPTION_GRACE_PERIOD_HOURS ?? '24',
+    10,
+  ),
+  /** Global request timeout in milliseconds before the server responds with 503. */
+  requestTimeoutMs: parseInt(process.env.REQUEST_TIMEOUT_MS ?? '30000', 10),
+  requestLog: {
+    skipPaths: (process.env.LOG_SKIP_PATHS ?? '/health,/health/liveness,/health/readiness,/ready,/metrics')
+      .split(',').map(p => p.trim()).filter(Boolean),
+    sampleRate: parseFloat(process.env.LOG_SAMPLE_RATE ?? '1'),
+  },
+  /** TTL for player list cache entries in milliseconds. */
+  playerCacheTtlMs: parseInt(process.env.PLAYER_CACHE_TTL_MS ?? '60000', 10),
+  /** TTL for IPFS pin dedup cache entries in milliseconds. */
+  ipfsPinCacheTtlMs: parseInt(process.env.IPFS_PIN_CACHE_TTL_MS ?? '300000', 10),
 };
 
 export default config;
+
+export function isProduction(): boolean { return config.nodeEnv === 'production'; }
+export function isStaging(): boolean { return config.nodeEnv === 'staging'; }
+export function isDevelopment(): boolean { return config.nodeEnv === 'development'; }
+
+/** Route prefix constants for API versioning */
+export const API_PREFIX = process.env.API_PREFIX ?? '/api';
+export const API_V1_PREFIX = process.env.API_V1_PREFIX ?? '/api/v1';

@@ -50,29 +50,36 @@ if (process.argv.includes('--runtime')) {
 // ─── CI / documentation check ────────────────────────────────────────────────
 const examplePath = path.resolve(__dirname, '../.env.example');
 const exampleKeys = new Set(
-  fs.readFileSync(examplePath, 'utf8')
+  fs
+    .readFileSync(examplePath, 'utf8')
     .split('\n')
-    .filter(l => l && !l.startsWith('#'))
-    .map(l => l.split('=')[0].trim())
+    .filter((l) => l && !l.startsWith('#'))
+    .map((l) => l.split('=')[0].trim())
 );
 
-const srcFiles = fs.readdirSync(path.resolve(__dirname, '../src'), { recursive: true })
-  .filter(f => f.endsWith('.ts'))
-  .map(f => path.resolve(__dirname, '../src', f));
+const srcFiles = fs
+  .readdirSync(path.resolve(__dirname, '../src'), { recursive: true })
+  .filter((f) => f.endsWith('.ts'))
+  .map((f) => path.resolve(__dirname, '../src', f));
 
-const missing = [];
+const undocumented = [];
 for (const file of srcFiles) {
   const content = fs.readFileSync(file, 'utf8');
-  const matches = [...content.matchAll(/process\.env\.([A-Z_]+)/g)];
+  const codeOnly = content
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .join('\n');
+  const matches = [...codeOnly.matchAll(/process\.env\.([A-Z_]+)/g)];
   for (const [, key] of matches) {
-    if (!exampleKeys.has(key)) missing.push({ key, file });
+    if (!exampleKeys.has(key)) undocumented.push({ key, file });
   }
 }
 
-if (missing.length) {
+if (undocumented.length) {
   console.error('Missing from .env.example:');
-  missing.forEach(({ key, file }) => console.error(`  ${key}  (${file})`));
+  undocumented.forEach(({ key, file }) => console.error(`  ${key}  (${file})`));
   process.exit(1);
 }
 
-console.log('All env vars documented in .env.example ✓');
+console.log('Environment validation passed ✓');

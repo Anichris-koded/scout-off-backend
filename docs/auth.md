@@ -1,0 +1,178 @@
+# Authentication
+
+This document describes the backend authentication flow for ScoutOff.
+It covers SEP-10 challenge/response, JWT issuance, token claims, refresh behavior, logout, and example `curl` requests.
+
+## SEP-10 Challenge / Response Flow
+
+ScoutOff uses Stellar SEP-10 for wallet-based authentication.
+The client proves ownership of a Stellar account by signing a server-issued challenge transaction.
+
+### 1. Request a SEP-10 challenge
+
+`GET /auth/challenge?account=G...`
+
+Request a challenge XDR by passing the client Stellar account public key in the `account` query string.
+
+Example:
+
+```bash
+curl "http://localhost:3000/auth/challenge?account=GABC123..." \
+  -H "Accept: application/json"
+```
+
+Successful response:
+
+```json
+{
+  "challenge": "AAAA...",
+  "networkPassphrase": "Test SDF Network"
+}
+```
+
+- `challenge` is a SEP-10 transaction XDR that must be signed by the client wallet.
+- `networkPassphrase` indicates which Stellar network the challenge uses.
+
+### 2. Sign the challenge and request a JWT
+
+`POST /auth/token`
+
+After signing the challenge transaction, submit the signed XDR to the backend.
+The request body should include the signed `transaction` and optionally a `role` hint when requesting a specific role such as `validator`.
+
+Example:
+
+```bash
+curl "http://localhost:3000/auth/token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transaction": "AAAA...",
+    "role": "scout"
+  }'
+```
+
+Successful response:
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "account": "GABC123...",
+  "expiresAt": 1710000000
+}
+```
+
+- `token` is the JWT used for authenticated API requests.
+- `account` is the authenticated Stellar account.
+- `expiresAt` is the UNIX timestamp when the token expires.
+
+## JWT Claims Structure
+
+The backend issues JWTs with the following standard claims:
+
+- `sub`: the Stellar account that authenticated the request.
+- `role`: the assigned role for the token.
+- `exp`: token expiration timestamp.
+
+Example decoded payload:
+
+```json
+{
+  "sub": "GABC123...",
+  "role": "player",
+  "iat": 1700000000,
+  "exp": 1700086400
+}
+```
+
+### Supported roles
+
+The backend supports these token roles:
+
+- `player`
+- `scout`
+- `validator`
+- `admin`
+
+The `role` may be assigned from the request or automatically elevated to `admin` if the authenticated account matches the configured `ADMIN_WALLET`.
+
+## Token Refresh
+
+There is no separate refresh endpoint.
+A new JWT is obtained by repeating the SEP-10 flow:
+request a challenge, sign it, and call `POST /auth/token` again.
+
+### Example refresh flow
+
+1. `GET /auth/challenge?account=GABC123...`
+2. Sign the returned challenge transaction
+3. `POST /auth/token` with the signed transaction
+
+The backend issues a new JWT each time, and the returned `expiresAt` indicates the next expiration.
+
+## Logout
+
+The backend does not expose a dedicated logout endpoint.
+Logout is handled on the client side by discarding the stored JWT.
+After logout, do not send the token in `Authorization` headers anymore.
+
+If the token expires, the backend will reject protected requests with `401 Invalid or expired token`.
+
+## Using the JWT for authenticated API requests
+
+Protected endpoints require the header:
+
+```
+Authorization: Bearer <token>
+```
+
+Example request to a protected route:
+
+```bash
+curl "http://localhost:3000/api/admin/events" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+## Auth-related endpoints
+
+### `GET /auth/challenge?account=G...`
+
+- Purpose: request a SEP-10 challenge transaction for the given Stellar account.
+- Authentication: none.
+- Returns: challenge XDR and network passphrase.
+
+### `POST /auth/token`
+
+- Purpose: submit the signed SEP-10 challenge and receive a JWT.
+- Authentication: none.
+- Request body:
+  - `transaction` (string): signed challenge XDR
+  - `role` (optional string): requested role hint
+- Returns: JWT, authenticated account, and expiration timestamp.
+
+### `POST /api/admin/introspect`
+
+This admin route can be used to verify a token and inspect its payload.
+It requires a valid admin JWT and is useful for debugging.
+
+Example:
+
+```bash
+curl "http://localhost:3000/api/admin/introspect" \
+  -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "token": "<token-to-inspect>" }'
+```
+
+Successful response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "sub": "GABC123...",
+    "role": "admin",
+    "iat": 1700000000,
+    "exp": 1700086400
+  }
+}
+```

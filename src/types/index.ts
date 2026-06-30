@@ -46,6 +46,9 @@ export interface PlayerProfile {
   }>;
 }
 
+// Subscription tier values coming from on-chain scout_subscribed events
+export type SubscriptionTier = 'basic' | 'premium' | 'pro';
+
 // Subscription state for scouts subscribing to player contact details
 export interface Subscription {
   subscriptionId: string;
@@ -53,7 +56,15 @@ export interface Subscription {
   playerId: string;
   startedAt: number; // unix timestamp
   expiresAt?: number; // optional expiry timestamp
-  tier?: string;
+  tier?: SubscriptionTier;
+}
+
+// Return type of isSubscribed() — includes tier when subscription is active
+export interface SubscriptionStatus {
+  active: boolean;
+  tier: SubscriptionTier | null;
+  expiresAt: number | null;
+  remainingDays: number;
 }
 
 // ─── Milestone ────────────────────────────────────────────────────────────────
@@ -81,6 +92,9 @@ export interface PlayerMilestone {
 
 // ─── Scout ────────────────────────────────────────────────────────────────────
 
+/** Available scout subscription tiers. */
+export type SubscriptionTier = 'basic' | 'premium';
+
 export interface Scout {
   wallet: string;
   subscriptionExpiry?: number; // ledger timestamp; undefined = no active sub
@@ -90,6 +104,15 @@ export interface ContactUnlock {
   scout: string;
   playerId: string;
   unlockedAt: number;
+}
+
+/** A single entry in a scout's payment history. */
+export interface PaymentHistoryItem {
+  /** On-chain transaction hash, or null when unavailable. */
+  transactionId: string | null;
+  amount: string;
+  token: string;
+  timestamp: string;
 }
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
@@ -113,6 +136,8 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  code?: string;
+  correlationId?: string;
 }
 
 export interface PaginatedResponse<T> extends ApiResponse<T[]> {
@@ -138,6 +163,24 @@ export interface JwtPayload {
   permissions?: string[];
 }
 
+// ─── Express Request augmentation ─────────────────────────────────────────────
+//
+// Extends the Express Request interface so that req.account and req.role are
+// properly typed throughout the codebase — no (req as any) casts needed.
+// These fields are attached by requireAuth / requireRole middleware in
+// src/middleware/auth.ts.
+
+declare global {
+  namespace Express {
+    interface Request {
+      /** Stellar public key of the authenticated user (set by auth middleware). */
+      account?: string;
+      /** Role of the authenticated user, e.g. 'admin', 'validator', 'scout'. */
+      role?: string;
+    }
+  }
+}
+
 // ─── SEP-10 ───────────────────────────────────────────────────────────────────
 
 export interface Sep10Challenge {
@@ -149,6 +192,25 @@ export interface Sep10Token {
   token: string;
   account: string;
   expiresAt: number; // Unix timestamp
+}
+
+// ─── Admin ────────────────────────────────────────────────────────────────────
+
+/** Shape of a contract event as returned by GET /api/admin/events. */
+export interface AdminEvent {
+  type: string;
+  ledger: number;
+  txHash: string;
+  payload: Record<string, unknown>;
+}
+
+/** Shape of a single fee withdrawal record from GET /api/admin/fees. */
+export interface FeeHistoryItem {
+  amount: string;        // XLM amount as string
+  recipient: string;     // Stellar address
+  ledger: number;
+  txHash: string;
+  timestamp: number;     // Unix timestamp
 }
 
 // ─── Contract events (indexed) ────────────────────────────────────────────────
@@ -174,4 +236,5 @@ export interface EventRecord {
   type: ContractEventType;
   payload: Record<string, unknown>;
   contractAddress: string;
+  created_at?: number | null;
 }

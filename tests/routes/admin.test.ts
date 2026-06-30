@@ -1,5 +1,5 @@
 import request from 'supertest';
-import app from '../../src/index';
+import app from '../../src/app';
 import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
 
 async function getToken(role: string): Promise<string> {
@@ -13,7 +13,7 @@ async function getToken(role: string): Promise<string> {
   return tokenRes.body.token;
 }
 
-const VALID_WALLET = 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN';
+const VALID_WALLET = Keypair.random().publicKey();
 
 // ─── Security headers ─────────────────────────────────────────────────────────
 
@@ -24,6 +24,20 @@ describe('Security headers', () => {
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['referrer-policy']).toBeDefined();
+  });
+
+  it('sets helmet cross-origin headers on all responses', async () => {
+    const res = await request(app).get('/health');
+    // Helmet-provided headers absent from the custom middleware
+    expect(res.headers['cross-origin-opener-policy']).toBeDefined();
+    expect(res.headers['cross-origin-resource-policy']).toBeDefined();
+    expect(res.headers['x-permitted-cross-domain-policies']).toBeDefined();
+    expect(res.headers['x-dns-prefetch-control']).toBeDefined();
+  });
+
+  it('does not expose x-powered-by header', async () => {
+    const res = await request(app).get('/health');
+    expect(res.headers['x-powered-by']).toBeUndefined();
   });
 });
 
