@@ -1,23 +1,11 @@
 import dotenv from 'dotenv';
-import { z } from 'zod';
 dotenv.config();
 
-const ConfigSchema = z.object({
-  port: z.coerce.number().default(4000),
-  network: z.enum(['testnet', 'mainnet']).default('testnet'),
-  networkPassphrase: z.string().default('Test SDF Network ; September 2015'),
-  horizonUrl: z.string().url().default('https://horizon-testnet.stellar.org'),
-  sorobanRpcUrl: z.string().url().default('https://soroban-testnet.stellar.org'),
-  contractId: z.string().min(1),
-  jwtSecret: z.string().min(1),
-  pinata: z.object({
-    apiKey: z.string().default(''),
-    secret: z.string().default(''),
-    gateway: z.string().url().default('https://gateway.pinata.cloud'),
-  }),
-  platformFeeBps: z.coerce.number().default(500),
-  dbPath: z.string().default('scout-off.db'),
-});
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
+}
 
 const config = {
   port: parseInt(process.env.PORT ?? '4000', 10),
@@ -45,11 +33,12 @@ const config = {
     xContentTypeOptions: process.env.SECURITY_X_CONTENT_TYPE_OPTIONS ?? 'nosniff',
     xFrameOptions: process.env.SECURITY_X_FRAME_OPTIONS ?? 'DENY',
     referrerPolicy: process.env.SECURITY_REFERRER_POLICY ?? 'no-referrer',
+    /** Content-Security-Policy value. Override via SECURITY_CSP env var. */
+    csp: process.env.SECURITY_CSP ?? "default-src 'none'",
   },
-  logLevel: (process.env.LOG_LEVEL ?? 'info') as 'debug' | 'info' | 'warn' | 'error',
   webhook: {
     enabled: process.env.WEBHOOK_ENABLED === 'true',
-    url: process.env.WEBHOOK_URL ?? ''
+    url: process.env.WEBHOOK_URL ?? '',
   },
   rateLimit: {
     enabled: process.env.RATE_LIMIT_ENABLED === 'true',

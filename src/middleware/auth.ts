@@ -2,13 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import config from '../config';
 import { JwtPayload } from '../types';
+import { isTokenRevoked } from '../services/tokenBlocklist';
 
 export interface AuthPayload extends jwt.JwtPayload, Partial<JwtPayload> {}
 
 /**
  * Middleware that verifies any valid JWT Bearer token.
  * Attaches `req.account` (Stellar public key) and `req.role` on success.
- * Returns 401 if the token is missing or invalid.
+ * Returns 401 if the token is missing, invalid, expired, or revoked.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
@@ -23,6 +24,14 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
   try {
     const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
+
+    // Check blocklist — revoked tokens are rejected even if still in-expiry
+    if (payload.jti && isTokenRevoked(payload.jti)) {
+      console.warn({ method: req.method, path: req.path, error: 'Token has been revoked', jti: payload.jti });
+      res.status(401).json({ success: false, error: 'Token has been revoked' });
+      return;
+    }
+
     (req as any).account = payload.sub;
     (req as any).role = payload.role;
     next();
@@ -59,6 +68,14 @@ export function requireRole(role: string) {
     }
     try {
       const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
+
+      // Check blocklist
+      if (payload.jti && isTokenRevoked(payload.jti)) {
+        console.warn({ method: req.method, path: req.path, error: 'Token has been revoked', jti: payload.jti });
+        res.status(401).json({ success: false, error: 'Token has been revoked' });
+        return;
+      }
+
       if (payload.role !== role) {
         console.warn({
           method: req.method,
@@ -103,6 +120,13 @@ export function requireRoles(...roles: string[]) {
     }
     try {
       const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
+
+      // Check blocklist
+      if (payload.jti && isTokenRevoked(payload.jti)) {
+        res.status(401).json({ success: false, error: 'Token has been revoked' });
+        return;
+      }
+
       if (!payload.role || !roles.includes(payload.role)) {
         res.status(403).json({ success: false, error: 'Insufficient permissions' });
         return;

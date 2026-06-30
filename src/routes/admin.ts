@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, registerValidator, revokeValidator, pauseContract, unpauseContract, revokeTokenHandler } from '../controllers/adminController';
 import { introspectToken } from '../controllers/adminController';
 import { requireAuth, requireRole } from '../middleware/auth';
 
@@ -103,5 +103,20 @@ router.post('/contract/unpause', requireRole('admin'), unpauseContract);
  * @auth Bearer (admin role required)
  */
 router.post('/introspect', requireRole('admin'), introspectToken);
+
+/**
+ * POST /api/admin/tokens/revoke
+ *
+ * Adds a JWT (by jti or full token) to the revocation blocklist.
+ * The token will be rejected by auth middleware on subsequent requests.
+ * Expired rows are pruned from the blocklist as a housekeeping step.
+ *
+ * @body jti {string}   - JWT ID to revoke (alternative to token)
+ * @body token {string} - Full JWT to revoke (jti extracted automatically)
+ * @response 200 { success: true, data: { jti, message } }
+ * @response 400 { success: false, error: string } - Missing/invalid input
+ * @auth Bearer (admin role required)
+ */
+router.post('/tokens/revoke', requireRole('admin'), revokeTokenHandler);
 
 export default router;

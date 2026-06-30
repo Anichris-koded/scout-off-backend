@@ -2,8 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
 import { getEvents } from '../services/indexer';
-import { AdminEvent, FeeHistoryItem, ApiResponse } from '../types';
+import { AdminEvent, FeeHistoryItem, ApiResponse, EventRecord } from '../types';
 import { logAuditEvent } from '../services/audit';
+import { revokeToken, pruneExpiredTokens } from '../services/tokenBlocklist';
 import config from '../config';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
@@ -169,6 +170,57 @@ export async function introspectToken(req: Request, res: Response, next: NextFun
         exp: payload.exp,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const revokeSchema = z.object({
+  /** The JTI (JWT ID) to revoke, or a full JWT token from which the JTI will be extracted. */
+  jti: z.string().optional(),
+  token: z.string().optional(),
+}).refine((d) => d.jti || d.token, { message: 'Either jti or token is required' });
+
+/**
+ * POST /api/admin/tokens/revoke
+ * Accepts a `jti` or a full `token` and adds the token to the blocklist.
+ * Also prunes expired rows from the blocklist as a housekeeping step.
+ */
+export async function revokeTokenHandler(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = revokeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0].message });
+      return;
+    }
+
+    let jti: string;
+    let expiresAt: number;
+
+    if (parsed.data.token) {
+      // Decode without verifying signature so an expired-but-legitimate token can still be revoked
+      const decoded = jwt.decode(parsed.data.token) as jwt.JwtPayload | null;
+      if (!decoded || !decoded.jti) {
+        res.status(400).json({ success: false, error: 'Token does not contain a jti claim' });
+        return;
+      }
+      jti = decoded.jti;
+      expiresAt = decoded.exp ?? Math.floor(Date.now() / 1000);
+    } else {
+      jti = parsed.data.jti!;
+      // Without a token we cannot know the exact expiry; default to 24h from now
+      expiresAt = Math.floor(Date.now() / 1000) + 86400;
+    }
+
+    revokeToken(jti, expiresAt);
+
+    // Prune expired rows as housekeeping
+    pruneExpiredTokens();
+
+    const adminWallet = (req as any).account as string ?? 'unknown';
+    console.info(`[admin] action=revoke_token admin=${adminWallet} jti=${jti}`);
+
+    res.json({ success: true, data: { jti, message: 'Token revoked successfully' } });
   } catch (err) {
     next(err);
   }

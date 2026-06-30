@@ -1,10 +1,17 @@
+import { Request, Response, NextFunction } from 'express';
 import { sanitizeInput } from '../utils/sanitizer';
 import { z } from 'zod';
 import { pinJson, gatewayUrl } from '../services/ipfs';
 import { getEvents } from '../services/indexer';
 import { invalidatePlayerCache } from '../services/cache';
-import { ApiResponse, ProgressLevel } from '../types';
+import { ApiResponse } from '../types';
 import { getTierMeta } from '../utils/tier';
+import { validateMinTier } from '../utils/minTierValidator';
+import { normalizePosition } from '../utils/positionAliases';
+import { dispatchEventWebhook } from '../services/webhooks';
+
+// IPFS CID regex — accepts CIDv0 (Qm...) and CIDv1 (b...) formats
+const CID_REGEX = /^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[A-Za-z2-7]{58,})$/;
 
 const baseRegistrationSchema = z.object({
   wallet: z.string().min(56).max(56),
@@ -92,6 +99,7 @@ export async function filterPlayers(req: Request, res: Response, next: NextFunct
       res.status(400).json({ success: false, error: tierResult.error });
       return;
     }
+    const minTier = tierResult.tier;
     const { region, position, page, pageSize } = filterSchema.parse(req.query);
     const sanitizedRegion = region ? sanitizeInput(region) : undefined;
     const sanitizedPosition = position ? sanitizeInput(position) : undefined;

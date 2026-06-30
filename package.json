@@ -42,7 +42,8 @@
     "testMatch": ["**/tests/**/*.test.ts"],
     "setupFiles": ["<rootDir>/tests/setup.ts"],
     "moduleNameMapper": {
-      "^better-sqlite3$": "<rootDir>/__mocks__/better-sqlite3.js"
+      "^better-sqlite3$": "<rootDir>/__mocks__/better-sqlite3.js",
+      "^node-fetch$": "<rootDir>/__mocks__/node-fetch.js"
     }
   }
 }
