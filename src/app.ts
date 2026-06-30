@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import config from './config';
 import authRoutes from './routes/auth';
 import playerRoutes from './routes/player';
@@ -21,6 +22,10 @@ const app = express();
 
 app.use(cors());
 app.use(correlationId);
+// Helmet provides a comprehensive set of HTTP security headers.
+// The custom securityHeaders middleware then overrides or augments
+// specific headers according to config (HSTS, X-Frame-Options, etc.).
+app.use(helmet());
 app.use(securityHeaders);
 app.use(responseTime);
 // Configure Express body parser with JSON payload size limit
