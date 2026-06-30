@@ -80,6 +80,10 @@ export async function unlockContact(req: Request, res: Response, next: NextFunct
 export async function getPaymentHistory(req: Request, res: Response, next: NextFunction) {
   try {
     const { wallet } = req.params;
+    if ((req as any).account !== wallet) {
+      res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account' });
+      return;
+    }
     const { from, to } = req.query as { from?: string; to?: string };
 
     // Derive mock history from indexed contact_unlocked events
