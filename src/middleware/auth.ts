@@ -30,7 +30,7 @@ function verifyToken(token: string): AuthPayload {
 /**
  * Middleware that verifies any valid JWT Bearer token.
  * Attaches `req.account` (Stellar public key) and `req.role` on success.
- * Returns 401 if the token is missing or invalid.
+ * Returns 401 if the token is missing, invalid, expired, or revoked.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
