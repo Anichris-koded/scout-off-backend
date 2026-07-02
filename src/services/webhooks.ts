@@ -29,15 +29,14 @@ export async function postWebhookWithRetry(
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
       });
-
-      if (response.ok) {
-        return;
+      
+      if (!response.ok) {
+        throw new Error(`Webhook dispatch failed with status ${response.status}`);
       }
-
-      lastError = new Error(`Webhook dispatch failed with status ${response.status}`);
+      return;
     } catch (err) {
       lastError = err;
     }

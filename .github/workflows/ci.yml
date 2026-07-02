@@ -7,6 +7,22 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
   test:
     runs-on: ubuntu-latest
 
@@ -23,15 +39,39 @@ jobs:
       - name: Validate env example
         run: node scripts/validate-env.js
 
-      - name: Lint
-        run: npm run lint
-
       - name: Type check
         run: npx tsc --noEmit
 
-      - name: Run tests
-        run: npm test
+      - name: Run tests with coverage
+        run: npx jest --runInBand --coverage --coverageReporters=text --coverageReporters=lcov
         env:
           CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4
-          JWT_SECRET: test-secret
-          DB_PATH: ':memory:'
+  contracts:
+    name: Soroban Contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build contracts (WASM)
+        working-directory: contracts
+        run: cargo build --release
+
+      - name: Test contracts (host target)
+        working-directory: contracts
+        run: cargo test --target x86_64-unknown-linux-gnu

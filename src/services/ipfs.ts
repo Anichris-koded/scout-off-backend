@@ -1,61 +1,159 @@
-// IPFS service (stub)
-// Provides simple deterministic stubs for pinning JSON and retrieving CIDs.
+// IPFS service via Pinata.
 //
-// Pinata integration notes:
-// - To integrate with Pinata, set PINATA_API_KEY and PINATA_SECRET_API_KEY in env.
-// - Use Pinata's /pinning/pinJSONToIPFS endpoint with a POST containing the JSON body.
-// - Optionally include metadata and options (pinPolicy) as described in Pinata docs.
-// - For production, add retries, content-address verification, and monitor pin status.
+// When PINATA_API_KEY and PINATA_SECRET are not set:
+//   - In non-production environments the service starts normally and pin operations
+//     return deterministic stub values, logging a warning on each call.
+//   - In production (NODE_ENV=production) pin operations throw immediately with a
+//     clear error so misconfiguration is caught at call time rather than silently.
+//
+// IPFS failure handling (#346):
+//   - Failures emit a CRITICAL log entry.
+//   - The JSON payload is queued in the pending_pins SQLite table for async retry.
+//
+// Service dependency: Pinata (https://pinata.cloud)
+//   Required env vars: PINATA_API_KEY, PINATA_SECRET
+//   Optional env var:  PINATA_GATEWAY (default: https://gateway.pinata.cloud)
 
-export async function pinJson(obj: unknown): Promise<{ cid: string }>{
-  // Deterministic placeholder CID for tests.
-  // Replace with Pinata HTTP call when enabling real integration.
-  const jsonStr = typeof obj === 'string' ? obj : JSON.stringify(obj);
-  // Simple stable hash-like mock using string length and char codes.
-  const seed = String(jsonStr.length + (jsonStr.charCodeAt(0) || 0));
-  const cid = `bafymock${seed}`;
-  return { cid };
-}
-
-export async function getCid(uriOrCid: string): Promise<string>{
-  // If an IPFS URI is provided like ipfs://<cid>, strip the prefix.
-  if (uriOrCid.startsWith('ipfs://')) return uriOrCid.replace('ipfs://','');
-  // Return the input for deterministic behavior in tests.
-  return uriOrCid;
-}
-
-export default { pinJson, getCid };
+import { createHash } from 'crypto';
 import axios from 'axios';
 import FormData from 'form-data';
+import { createHash } from 'crypto';
 import config from '../config';
+import { logger } from '../utils/logger';
+import { insertPendingPin, getPendingPins, deletePendingPin, incrementPendingPinAttempts } from '../db';
+import { cacheGet, cacheSet } from './cache';
 
-const PINATA_PIN_URL = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
-const PINATA_FILE_URL = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
-const PINATA_TEST_URL = 'https://api.pinata.cloud/data/testAuthentication';
+const PINATA_PIN_JSON_URL = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
+const PINATA_PIN_FILE_URL = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
+const PINATA_TEST_URL     = 'https://api.pinata.cloud/data/testAuthentication';
 
-function headers() {
+function isPinataConfigured(): boolean {
+  return !!(config.pinata.apiKey && config.pinata.secret);
+}
+
+function assertPinataConfigured(): void {
+  throw new Error(
+    'IPFS service unavailable: PINATA_API_KEY and PINATA_SECRET must be set in production'
+  );
+}
+
+function pinataHeaders() {
   return {
     pinata_api_key: config.pinata.apiKey,
     pinata_secret_api_key: config.pinata.secret,
   };
 }
 
-/** Pin a JSON object to IPFS via Pinata. Returns the CID. */
+function devStubCid(seed: string): string {
+  const n = seed.length + (seed.charCodeAt(0) || 0);
+  return `bafymock${n}`;
+}
+
+// ---------------------------------------------------------------------------
+// pinJson deduplication cache
+// ---------------------------------------------------------------------------
+
+/**
+ * Recursively serialize an object with sorted keys for deterministic hashing.
+ * Using sorted-key serialization rather than JSON.stringify(obj) directly
+ * because key insertion order is not guaranteed to be identical across call
+ * sites, which would produce different hashes for semantically identical
+ * objects.
+ * No external stable-stringify dependency is needed — a small recursive
+ * implementation is sufficient and keeps this self-contained.
+ */
+function canonicalStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return JSON.stringify(value);
+  }
+  const sorted = Object.keys(value as Record<string, unknown>)
+    .sort()
+    .map(k => `${JSON.stringify(k)}:${canonicalStringify((value as Record<string, unknown>)[k])}`)
+    .join(',');
+  return `{${sorted}}`;
+}
+
+function hashMetadata(body: object): string {
+  return createHash('sha256').update(canonicalStringify(body)).digest('hex');
+}
+
+interface PinCacheEntry { cid: string; timestamp: number; }
+
+/**
+ * In-memory deduplication cache for pinJson calls.
+ *
+ * NOTE: This cache is per-process / in-memory and will NOT deduplicate
+ * across multiple server instances — explicitly out of scope for this fix.
+ *
+ * TODO: There is a theoretical race condition where two near-simultaneous
+ * identical requests could both miss the cache before either completes,
+ * resulting in two Pinata calls. Resolving this would require an inflight
+ * promise cache — not addressed here as no equivalent locking pattern
+ * exists in this codebase.
+ */
+const pinJsonCache = new Map<string, PinCacheEntry>();
+
+/** Exposed for test teardown only — do not call in production code. */
+export function clearPinJsonCache(): void {
+  pinJsonCache.clear();
+}
+
+/**
+ * Pin a JSON object to IPFS via Pinata. Returns the CID.
+ *
+ * Deduplication: the metadata is canonically serialized (sorted keys,
+ * recursively) and hashed with sha256.  If an identical hash was pinned
+ * within the configured TTL (PIN_JSON_CACHE_TTL_MS, default 5 min) the
+ * cached CID is returned immediately without hitting Pinata, preventing
+ * duplicate pins on client-side retries after network timeouts.
+ */
 export async function pinJson(body: object): Promise<string> {
-  const res = await axios.post(PINATA_PIN_URL, body, { headers: headers() });
-  return res.data.IpfsHash as string;
+  const hash = hashMetadata(body);
+  const ttlMs = config.pinJsonCacheTtlMs;
+  const cached = pinJsonCache.get(hash);
+  if (cached && Date.now() - cached.timestamp < ttlMs) {
+    logger.debug(`[ipfs] pinJson cache hit — returning cached CID (hash=${hash.slice(0, 8)}…)`);
+    return cached.cid;
+  }
+
+  if (!isPinataConfigured()) {
+    if (process.env.NODE_ENV === 'production') assertPinataConfigured();
+    logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinJson');
+    return devStubCid(JSON.stringify(body));
+  }
+  try {
+    // Hashing uses plain JSON.stringify (order-sensitive) by design: this deduplicates
+    // the specific case of a client retrying the same literal request body after a
+    // network timeout — not general semantic-equality dedup of differently-ordered objects.
+    const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    const cached = cacheGet<string>(`ipfs:pin:${hash}`);
+    if (cached !== undefined) return cached;
+
+    const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
+    const cid = res.data.IpfsHash as string;
+
+    pinJsonCache.set(hash, { cid, timestamp: Date.now() });
+ main
+    return cid;
+  } catch (err) {
+    logger.critical('[ipfs] Pinata unavailable — queueing payload for retry', (err as Error).message);
+    const now = new Date().toISOString();
+    insertPendingPin({ payload: JSON.stringify(body), created_at: now, last_tried: now });
+    throw err;
+  }
 }
 
 /** Pin a file buffer to IPFS via Pinata. Returns the CID. */
-export async function pinFile(
-  buffer: Buffer,
-  filename: string,
-  mimeType: string
-): Promise<string> {
+export async function pinFile(buffer: Buffer, filename: string, mimeType: string): Promise<string> {
+  if (!isPinataConfigured()) {
+    if (process.env.NODE_ENV === 'production') assertPinataConfigured();
+    logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinFile');
+    return devStubCid(filename);
+  }
   const form = new FormData();
   form.append('file', buffer, { filename, contentType: mimeType });
-  const res = await axios.post(PINATA_FILE_URL, form, {
-    headers: { ...headers(), ...form.getHeaders() },
+  const res = await axios.post(PINATA_PIN_FILE_URL, form, {
+    headers: { ...pinataHeaders(), ...form.getHeaders() },
     maxBodyLength: Infinity,
   });
   return res.data.IpfsHash as string;
@@ -66,14 +164,47 @@ export function gatewayUrl(cid: string): string {
   return `${config.pinata.gateway}/ipfs/${cid}`;
 }
 
+/** Build all public gateway URLs for a CID, in priority order. */
+export function gatewayUrls(cid: string): string[] {
+  return config.pinata.gateways.map(gateway => `${gateway}/ipfs/${cid}`);
+}
+
+/** Strip ipfs:// prefix from a URI, or return the input unchanged. */
+export async function getCid(uriOrCid: string): Promise<string> {
+  return uriOrCid.startsWith('ipfs://') ? uriOrCid.replace('ipfs://', '') : uriOrCid;
+}
+
 /**
- * Health check for the IPFS/Pinata service dependency.
- * Calls the Pinata authentication test endpoint to confirm connectivity.
- * Resolves on success; rejects with an error if the service is unreachable
- * or returns a non-2xx status.
- *
- * Stub this function in tests to avoid real network calls.
+ * Health check for the Pinata/IPFS dependency.
+ * Resolves immediately (with a warning) when credentials are absent in non-production.
+ * Rejects with a clear error in production without credentials.
  */
 export async function checkHealth(): Promise<void> {
-  await axios.get(PINATA_TEST_URL, { headers: headers() });
+  if (!isPinataConfigured()) {
+    if (process.env.NODE_ENV === 'production') assertPinataConfigured();
+    logger.warn('[ipfs] Pinata not configured — skipping IPFS health check in dev');
+    return;
+  }
+  await axios.get(PINATA_TEST_URL, { headers: pinataHeaders() });
 }
+
+/**
+ * Retry queued pending_pins entries. Called periodically when IPFS recovers.
+ * Successfully pinned entries are removed from the queue.
+ */
+export async function retryPendingPins(): Promise<void> {
+  if (!isPinataConfigured()) return;
+  const pending = getPendingPins();
+  for (const row of pending) {
+    try {
+      const body = JSON.parse(row.payload) as object;
+      const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
+      logger.info(`[ipfs] retried pending pin id=${row.id} cid=${res.data.IpfsHash as string}`);
+      deletePendingPin(row.id);
+    } catch {
+      incrementPendingPinAttempts(row.id);
+    }
+  }
+}
+
+export default { pinJson, pinFile, gatewayUrl, getCid, checkHealth, retryPendingPins, clearPinJsonCache };

@@ -15,10 +15,20 @@ describe('validateMinTier', () => {
     expect(result.tier).toBe(2);
   });
 
+  it('accepts boundary string values 0 and 3', () => {
+    expect(validateMinTier('0')).toEqual({ valid: true, tier: 0 });
+    expect(validateMinTier('3')).toEqual({ valid: true, tier: 3 });
+  });
+
+  it('accepts whitespace-padded string values', () => {
+    expect(validateMinTier(' 1 ')).toEqual({ valid: true, tier: 1 });
+  });
+
   it('returns valid with no tier when value is absent', () => {
     expect(validateMinTier(undefined)).toEqual({ valid: true });
     expect(validateMinTier(null)).toEqual({ valid: true });
     expect(validateMinTier('')).toEqual({ valid: true });
+    expect(validateMinTier('   ')).toEqual({ valid: true });
   });
 
   it('rejects out-of-range values', () => {
@@ -39,6 +49,24 @@ describe('validateMinTier', () => {
     expect(result.valid).toBe(false);
     expect(result.error).toMatch(/integer/);
     expect(result.error).toMatch(/0, 1, 2, 3/);
+  });
+
+  it('rejects string float values', () => {
+    const result = validateMinTier('1.5');
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/integer/);
+  });
+
+  it('rejects exponential string values', () => {
+    const result = validateMinTier('1e1');
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/integer/);
+  });
+
+  it('rejects hexadecimal string values', () => {
+    const result = validateMinTier('0x2');
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/integer/);
   });
 
   it('rejects float values', () => {
