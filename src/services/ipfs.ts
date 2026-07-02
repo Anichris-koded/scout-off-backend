@@ -14,6 +14,7 @@
 //   Required env vars: PINATA_API_KEY, PINATA_SECRET
 //   Optional env var:  PINATA_GATEWAY (default: https://gateway.pinata.cloud)
 
+import { createHash } from 'crypto';
 import axios from 'axios';
 import FormData from 'form-data';
 import { createHash } from 'crypto';
@@ -48,8 +49,73 @@ function devStubCid(seed: string): string {
   return `bafymock${n}`;
 }
 
-/** Pin a JSON object to IPFS via Pinata. Returns the CID. */
+// ---------------------------------------------------------------------------
+// pinJson deduplication cache
+// ---------------------------------------------------------------------------
+
+/**
+ * Recursively serialize an object with sorted keys for deterministic hashing.
+ * Using sorted-key serialization rather than JSON.stringify(obj) directly
+ * because key insertion order is not guaranteed to be identical across call
+ * sites, which would produce different hashes for semantically identical
+ * objects.
+ * No external stable-stringify dependency is needed — a small recursive
+ * implementation is sufficient and keeps this self-contained.
+ */
+function canonicalStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return JSON.stringify(value);
+  }
+  const sorted = Object.keys(value as Record<string, unknown>)
+    .sort()
+    .map(k => `${JSON.stringify(k)}:${canonicalStringify((value as Record<string, unknown>)[k])}`)
+    .join(',');
+  return `{${sorted}}`;
+}
+
+function hashMetadata(body: object): string {
+  return createHash('sha256').update(canonicalStringify(body)).digest('hex');
+}
+
+interface PinCacheEntry { cid: string; timestamp: number; }
+
+/**
+ * In-memory deduplication cache for pinJson calls.
+ *
+ * NOTE: This cache is per-process / in-memory and will NOT deduplicate
+ * across multiple server instances — explicitly out of scope for this fix.
+ *
+ * TODO: There is a theoretical race condition where two near-simultaneous
+ * identical requests could both miss the cache before either completes,
+ * resulting in two Pinata calls. Resolving this would require an inflight
+ * promise cache — not addressed here as no equivalent locking pattern
+ * exists in this codebase.
+ */
+const pinJsonCache = new Map<string, PinCacheEntry>();
+
+/** Exposed for test teardown only — do not call in production code. */
+export function clearPinJsonCache(): void {
+  pinJsonCache.clear();
+}
+
+/**
+ * Pin a JSON object to IPFS via Pinata. Returns the CID.
+ *
+ * Deduplication: the metadata is canonically serialized (sorted keys,
+ * recursively) and hashed with sha256.  If an identical hash was pinned
+ * within the configured TTL (PIN_JSON_CACHE_TTL_MS, default 5 min) the
+ * cached CID is returned immediately without hitting Pinata, preventing
+ * duplicate pins on client-side retries after network timeouts.
+ */
 export async function pinJson(body: object): Promise<string> {
+  const hash = hashMetadata(body);
+  const ttlMs = config.pinJsonCacheTtlMs;
+  const cached = pinJsonCache.get(hash);
+  if (cached && Date.now() - cached.timestamp < ttlMs) {
+    logger.debug(`[ipfs] pinJson cache hit — returning cached CID (hash=${hash.slice(0, 8)}…)`);
+    return cached.cid;
+  }
+
   if (!isPinataConfigured()) {
     if (process.env.NODE_ENV === 'production') assertPinataConfigured();
     logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinJson');
@@ -65,7 +131,9 @@ export async function pinJson(body: object): Promise<string> {
 
     const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
     const cid = res.data.IpfsHash as string;
-    cacheSet(`ipfs:pin:${hash}`, cid, config.ipfsPinCacheTtlMs);
+
+    pinJsonCache.set(hash, { cid, timestamp: Date.now() });
+ main
     return cid;
   } catch (err) {
     logger.critical('[ipfs] Pinata unavailable — queueing payload for retry', (err as Error).message);
@@ -139,4 +207,4 @@ export async function retryPendingPins(): Promise<void> {
   }
 }
 
-export default { pinJson, pinFile, gatewayUrl, getCid, checkHealth, retryPendingPins };
+export default { pinJson, pinFile, gatewayUrl, getCid, checkHealth, retryPendingPins, clearPinJsonCache };

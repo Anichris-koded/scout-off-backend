@@ -127,8 +127,10 @@ const config = {
   },
   /** TTL for player list cache entries in milliseconds. */
   playerCacheTtlMs: parseInt(process.env.PLAYER_CACHE_TTL_MS ?? '60000', 10),
-  /** TTL for IPFS pin dedup cache entries in milliseconds. */
-  ipfsPinCacheTtlMs: parseInt(process.env.IPFS_PIN_CACHE_TTL_MS ?? '300000', 10),
+
+  /** TTL for pinJson deduplication cache entries in milliseconds (default: 5 min). */
+  pinJsonCacheTtlMs: parseInt(process.env.PIN_JSON_CACHE_TTL_MS ?? '300000', 10),
+
 };
 
 export default config;
