@@ -40,10 +40,10 @@ jobs:
         run: node scripts/validate-env.js
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: node node_modules/.bin/tsc --noEmit
 
       - name: Run tests with coverage
-        run: npx jest --runInBand --forceExit --coverage --coverageReporters=text --coverageReporters=lcov
+        run: node node_modules/.bin/jest --runInBand --forceExit --coverage --coverageReporters=text --coverageReporters=lcov
         env:
           CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4
   contracts:
