@@ -15,9 +15,14 @@ Welcome! This guide covers contribution workflows, code standards, and critical 
 
 ### Prerequisites
 
-- Node.js ≥ 18
+- Node.js — see [`.nvmrc`](.nvmrc) for the exact version used by CI (currently Node 20)
+  - If you use **nvm**: `nvm install && nvm use` (reads `.nvmrc` automatically)
+  - If you use **fnm**: `fnm install && fnm use`
+  - If you use **asdf**: `asdf install nodejs` (reads `.nvmrc` via the Node.js plugin)
 - npm ≥ 9
 - Git
+
+> **`.nvmrc` is the single source of truth** for the Node.js version. CI workflows read it via `node-version-file: '.nvmrc'`, so bumping the version in that one file keeps local dev and CI in sync.
 
 ### Setup
 
@@ -25,6 +30,8 @@ Welcome! This guide covers contribution workflows, code standards, and critical 
    ```bash
    git clone https://github.com/scout-off/scout-off-backend.git
    cd scout-off-backend
+   # Pick up the correct Node version automatically (nvm/fnm/asdf)
+   nvm use   # or: fnm use
    npm install
    ```
 
