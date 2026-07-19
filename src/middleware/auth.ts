@@ -106,6 +106,50 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  */
 export function requireRole(role: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
+    // ── X-API-Key path ──────────────────────────────────────────────────────────
+    const apiKeyHeader = req.headers['x-api-key'];
+    if (apiKeyHeader && typeof apiKeyHeader === 'string') {
+      try {
+        // Lazy require avoids a circular module dependency at load time.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { resolveApiKey } = require('../controllers/apiKeyController') as {
+          resolveApiKey: (rawKey: string) => { scout_wallet: string; id: number } | null;
+        };
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { touchApiKeyLastUsed } = require('../db') as {
+          touchApiKeyLastUsed: (id: number) => void;
+        };
+        const resolved = resolveApiKey(apiKeyHeader);
+        if (!resolved) {
+          logger.warn({ method: req.method, path: req.path, error: 'Invalid or revoked API key' });
+          sendUnauthorized(res, 'Invalid or revoked API key');
+          return;
+        }
+        if (role !== 'scout') {
+          logger.warn({
+            method: req.method,
+            path: req.path,
+            error: 'Insufficient permissions',
+            requiredRole: role,
+            providedRole: 'scout',
+          });
+          logAuditEvent({ action: 'auth_forbidden', path: req.path, reason: 'Insufficient permissions', requiredRole: role, timestamp: new Date().toISOString() });
+          sendForbidden(res, 'Insufficient permissions', { requiredRole: role, providedRole: 'scout' });
+          return;
+        }
+        try { touchApiKeyLastUsed(resolved.id); } catch { /* best-effort */ }
+        req.account = resolved.scout_wallet;
+        req.role = 'scout';
+        next();
+        return;
+      } catch {
+        logger.warn({ method: req.method, path: req.path, error: 'API key auth error' });
+        sendUnauthorized(res, 'Invalid or revoked API key');
+        return;
+      }
+    }
+
+    // ── JWT Bearer path ─────────────────────────────────────────────────────────
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) {
       logger.warn({ method: req.method, path: req.path, error: 'Missing auth token', requiredRole: role });
