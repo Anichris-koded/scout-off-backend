@@ -4,6 +4,7 @@ import { getScoutRecommendations } from '../controllers/scoutRecommendationsCont
 import { requireRole } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
 import { walletRateLimit } from '../middleware/rateLimit';
+import { methodNotAllowed } from '../middleware/methodNotAllowed';
 
 const router = Router();
 
@@ -18,7 +19,9 @@ const router = Router();
  * @response 401 { success: false, error: string } - Missing or invalid token
  * @auth Bearer (scout role required)
  */
-router.get('/:wallet/subscription', requireRole('scout'), getSubscription);
+router.route('/:wallet/subscription')
+  .get(requireRole('scout'), getSubscription)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * POST /api/scouts/:wallet/subscribe
@@ -34,10 +37,7 @@ router.get('/:wallet/subscription', requireRole('scout'), getSubscription);
  * @response 402 { success: false, error: string } - Insufficient XLM balance
  * @response 403 { success: false, error: string } - Scout role required or wallet mismatch
  * @auth Bearer (scout role required)
- */
-router.post("/:wallet/subscribe", requireRole("scout"), walletRateLimit(), subscribe);
-
-/**
+ *
  * PUT /api/scouts/:wallet/subscribe
  *
  * Renew or create a subscription.
@@ -52,13 +52,7 @@ router.post("/:wallet/subscribe", requireRole("scout"), walletRateLimit(), subsc
  * @response 402 { success: false, error: string } - Insufficient XLM balance
  * @response 403 { success: false, error: string } - Scout role required or wallet mismatch
  * @auth Bearer (scout role required)
- */
-router.put("/:wallet/subscribe", requireRole("scout"), walletRateLimit(), renewSubscription);
-
-router.get("/:wallet/contacts", requireRole("scout"), getUnlockedContacts);
-router.get("/:wallet/contacts/:playerId", requireRole("scout"), getContactDetails);
-
-/**
+ *
  * DELETE /api/scouts/:wallet/subscribe
  *
  * Cancel an active subscription. Records cancellation on-chain and locally.
@@ -69,35 +63,51 @@ router.get("/:wallet/contacts/:playerId", requireRole("scout"), getContactDetail
  * @response 404 { success: false, error: string } - No active subscription found
  * @auth Bearer (scout role required)
  */
-router.delete('/:wallet/subscribe', requireRole('scout'), cancelSubscription);
+router.route('/:wallet/subscribe')
+  .post(requireRole('scout'), walletRateLimit(), subscribe)
+  .put(requireRole('scout'), walletRateLimit(), renewSubscription)
+  .delete(requireRole('scout'), cancelSubscription)
+  .all(methodNotAllowed(['POST', 'PUT', 'DELETE']));
 
 /**
  * GET /api/scouts/:wallet/contacts
+ *
+ * GET /api/scouts/:wallet/contacts/:playerId
  */
-router.get('/:wallet/contacts', requireRole('scout'), getUnlockedContacts);
+router.route('/:wallet/contacts')
+  .get(requireRole('scout'), getUnlockedContacts)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+router.route('/:wallet/contacts/:playerId')
+  .get(requireRole('scout'), getContactDetails)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * POST /api/scouts/:wallet/contacts/:playerId/unlock
  */
-router.post(
-  "/:wallet/contacts/:playerId/unlock",
-  requireRole("scout"),
-  walletRateLimit(),
-  validateBody(unlockContactSchema),
-  unlockContact,
-);
+router.route("/:wallet/contacts/:playerId/unlock")
+  .post(
+    requireRole("scout"),
+    walletRateLimit(),
+    validateBody(unlockContactSchema),
+    unlockContact,
+  )
+  .all(methodNotAllowed(['POST']));
 
-router.get('/:wallet/payments', requireRole('scout'), getPaymentHistory);
+router.route('/:wallet/payments')
+  .get(requireRole('scout'), getPaymentHistory)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * POST /api/scouts/:wallet/trial-offer
  */
-router.post(
-  '/:wallet/trial-offer',
-  requireRole('scout'),
-  validateBody(trialOfferSchema),
-  submitTrialOffer,
-);
+router.route('/:wallet/trial-offer')
+  .post(
+    requireRole('scout'),
+    validateBody(trialOfferSchema),
+    submitTrialOffer,
+  )
+  .all(methodNotAllowed(['POST']));
 
 /**
  * GET /api/scouts/:wallet/trial-offers
@@ -107,21 +117,23 @@ router.post(
  * indexed locally by tx_hash. Distinct from the singular /trial-offer stub
  * endpoint above and from the accept/reject workflow in trialOfferController.
  */
-router.get('/:wallet/trial-offers', requireRole('scout'), listTrialOffers);
-router.post(
-  '/:wallet/trial-offers',
-  requireRole('scout'),
-  validateBody(trialOfferSchema),
-  createTrialOffer,
-);
+router.route('/:wallet/trial-offers')
+  .get(requireRole('scout'), listTrialOffers)
+  .post(
+    requireRole('scout'),
+    validateBody(trialOfferSchema),
+    createTrialOffer,
+  )
+  .all(methodNotAllowed(['GET', 'POST', 'HEAD']));
 
 /**
  * GET /api/scouts/:wallet/recommendations
  */
-router.get(
-  '/:wallet/recommendations',
-  requireRole('scout'),
-  getScoutRecommendations,
-);
+router.route('/:wallet/recommendations')
+  .get(
+    requireRole('scout'),
+    getScoutRecommendations,
+  )
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 export default router;
