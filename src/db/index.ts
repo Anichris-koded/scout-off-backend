@@ -635,15 +635,26 @@ export interface PendingPinRow {
   attempts: number;
   created_at: string;
   last_tried: string | null;
+  hash?: string | null;
 }
 
 export function insertPendingPin(p: {
   payload: string;
   created_at: string;
   last_tried: string;
-}): void {
-  const sql = `INSERT INTO pending_pins (payload, created_at, last_tried) VALUES (?, ?, ?)`;
-  timedQuery(sql, () => getDb().prepare(sql).run(p.payload, p.created_at, p.last_tried));
+  hash?: string | null;
+}): boolean {
+  if (p.hash) {
+    const sql = `INSERT OR IGNORE INTO pending_pins (payload, hash, created_at, last_tried) VALUES (?, ?, ?, ?)`;
+    return timedQuery(sql, () => {
+      const info = getDb().prepare(sql).run(p.payload, p.hash, p.created_at, p.last_tried);
+      return info.changes > 0;
+    });
+  } else {
+    const sql = `INSERT INTO pending_pins (payload, created_at, last_tried) VALUES (?, ?, ?)`;
+    timedQuery(sql, () => getDb().prepare(sql).run(p.payload, p.created_at, p.last_tried));
+    return true;
+  }
 }
 
 export function getPendingPins(): PendingPinRow[] {
@@ -654,6 +665,16 @@ export function getPendingPins(): PendingPinRow[] {
 export function deletePendingPin(id: number): void {
   const sql = 'DELETE FROM pending_pins WHERE id = ?';
   timedQuery(sql, () => getDb().prepare(sql).run(id));
+}
+
+export function deletePendingPinByHash(hash: string): void {
+  const sql = 'DELETE FROM pending_pins WHERE hash = ?';
+  timedQuery(sql, () => getDb().prepare(sql).run(hash));
+}
+
+export function isPendingPinByHash(hash: string): boolean {
+  const sql = 'SELECT 1 FROM pending_pins WHERE hash = ? LIMIT 1';
+  return timedQuery(sql, () => getDb().prepare(sql).get(hash) !== undefined);
 }
 
 export function incrementPendingPinAttempts(id: number): void {

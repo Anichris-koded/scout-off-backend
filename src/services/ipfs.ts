@@ -19,7 +19,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import config from '../config';
 import { logger } from '../utils/logger';
-import { insertPendingPin, getPendingPins, deletePendingPin, incrementPendingPinAttempts } from '../db';
+import { insertPendingPin, getPendingPins, deletePendingPin, deletePendingPinByHash, isPendingPinByHash, incrementPendingPinAttempts } from '../db';
 
 const PINATA_PIN_JSON_URL = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
 const PINATA_PIN_FILE_URL = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
@@ -48,7 +48,7 @@ function devStubCid(seed: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// pinJson deduplication cache
+// pinJson deduplication cache & inflight promise tracker (#466)
 // ---------------------------------------------------------------------------
 
 /**
@@ -78,32 +78,28 @@ function hashMetadata(body: object): string {
 interface PinCacheEntry { cid: string; timestamp: number; }
 
 /**
- * In-memory deduplication cache for pinJson calls.
- *
- * NOTE: This cache is per-process / in-memory and will NOT deduplicate
- * across multiple server instances — explicitly out of scope for this fix.
- *
- * TODO: There is a theoretical race condition where two near-simultaneous
- * identical requests could both miss the cache before either completes,
- * resulting in two Pinata calls. Resolving this would require an inflight
- * promise cache — not addressed here as no equivalent locking pattern
- * exists in this codebase.
+ * In-memory deduplication cache and in-flight request tracker for pinJson calls.
+ * Uses the pending_pins table as an atomic concurrency guard / mutex.
  */
 const pinJsonCache = new Map<string, PinCacheEntry>();
+const inflightPins = new Map<string, Promise<string>>();
 
 /** Exposed for test teardown only — do not call in production code. */
 export function clearPinJsonCache(): void {
   pinJsonCache.clear();
+  inflightPins.clear();
 }
 
 /**
  * Pin a JSON object to IPFS via Pinata. Returns the CID.
  *
  * Deduplication: the metadata is canonically serialized (sorted keys,
- * recursively) and hashed with sha256.  If an identical hash was pinned
+ * recursively) and hashed with sha256. If an identical hash was pinned
  * within the configured TTL (PIN_JSON_CACHE_TTL_MS, default 5 min) the
- * cached CID is returned immediately without hitting Pinata, preventing
- * duplicate pins on client-side retries after network timeouts.
+ * cached CID is returned immediately without hitting Pinata.
+ *
+ * Atomic Concurrency: pending_pins DB table and in-flight promises act as a mutex
+ * so concurrent identical requests resolve to exactly one Pinata API call.
  */
 export async function pinJson(body: object): Promise<string> {
   const hash = hashMetadata(body);
@@ -114,24 +110,68 @@ export async function pinJson(body: object): Promise<string> {
     return cached.cid;
   }
 
+  if (inflightPins.has(hash)) {
+    logger.debug(`[ipfs] pinJson inflight hit — waiting for in-flight request (hash=${hash.slice(0, 8)}…)`);
+    return await inflightPins.get(hash)!;
+  }
+
   if (!isPinataConfigured()) {
     if (process.env.NODE_ENV === 'production') assertPinataConfigured();
     logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinJson');
     return devStubCid(JSON.stringify(body));
   }
-  try {
-    const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
-    const cid = res.data.IpfsHash as string;
 
-    pinJsonCache.set(hash, { cid, timestamp: Date.now() });
+  const now = new Date().toISOString();
+  const acquiredLock = insertPendingPin({
+    payload: JSON.stringify(body),
+    hash,
+    created_at: now,
+    last_tried: now,
+  });
 
-    return cid;
-  } catch (err) {
-    logger.critical('[ipfs] Pinata unavailable — queueing payload for retry', (err as Error).message);
-    const now = new Date().toISOString();
-    insertPendingPin({ payload: JSON.stringify(body), created_at: now, last_tried: now });
-    throw err;
+  if (acquiredLock === false) {
+    logger.debug(`[ipfs] pinJson lock contended — polling for completion (hash=${hash.slice(0, 8)}…)`);
+    const start = Date.now();
+    const MAX_POLL_MS = 30000;
+    while (Date.now() - start < MAX_POLL_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const pollCached = pinJsonCache.get(hash);
+      if (pollCached && Date.now() - pollCached.timestamp < ttlMs) {
+        return pollCached.cid;
+      }
+      if (inflightPins.has(hash)) {
+        return await inflightPins.get(hash)!;
+      }
+      if (!isPendingPinByHash(hash)) {
+        const finalCached = pinJsonCache.get(hash);
+        if (finalCached && Date.now() - finalCached.timestamp < ttlMs) {
+          return finalCached.cid;
+        }
+        break;
+      }
+    }
   }
+
+  const pinPromise = (async () => {
+    try {
+      const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
+      const cid = res.data.IpfsHash as string;
+
+      pinJsonCache.set(hash, { cid, timestamp: Date.now() });
+      return cid;
+    } catch (err) {
+      logger.critical('[ipfs] Pinata unavailable — queueing payload for retry', (err as Error).message);
+      const failTime = new Date().toISOString();
+      insertPendingPin({ payload: JSON.stringify(body), created_at: failTime, last_tried: failTime });
+      throw err;
+    } finally {
+      deletePendingPinByHash(hash);
+      inflightPins.delete(hash);
+    }
+  })();
+
+  inflightPins.set(hash, pinPromise);
+  return await pinPromise;
 }
 
 /** Pin a file buffer to IPFS via Pinata. Returns the CID. */

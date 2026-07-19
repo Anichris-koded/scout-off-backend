@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 use scout_off_shared::{
     errors::Error,
     events::{emit_contact_unlocked, emit_scout_subscribed},
