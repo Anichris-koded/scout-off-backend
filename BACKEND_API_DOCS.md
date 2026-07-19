@@ -122,13 +122,17 @@ Filter players by region, position, and minimum verified tier. No auth required.
 
 **Query params**
 
-| Param      | Type    | Required | Description                          |
-|------------|---------|----------|--------------------------------------|
-| `region`   | string  | ❌       | Filter by region                     |
-| `position` | string  | ❌       | Filter by position                   |
-| `minTier`  | integer | ❌       | Minimum progress level (0–3)         |
-| `page`     | integer | ❌       | Page number (default: 1)             |
-| `pageSize` | integer | ❌       | Results per page (default: 20, max: 100) |
+| Param      | Type    | Required | Description                                              |
+|------------|---------|----------|----------------------------------------------------------|
+| `region`   | string  | ❌       | Filter by region                                         |
+| `position` | string  | ❌       | Filter by position                                       |
+| `minTier`  | integer | ❌       | Minimum progress level (0–3)                             |
+| `sortBy`   | string  | ❌       | Sort field: `tier` or `region`                           |
+| `sortOrder`| string  | ❌       | Sort direction: `asc` (default) or `desc`                |
+| `page`     | integer | ❌       | Page number (default: `1`, minimum: `1`)                 |
+| `pageSize` | integer | ❌       | Results per page (default: `20`, minimum: `1`, maximum: `100`) |
+
+> **Pagination limits:** `pageSize` must be between 1 and 100. A value outside this range returns HTTP 400 — values are never silently clamped.
 
 **Response `200`**
 ```json
@@ -250,6 +254,37 @@ List players unlocked by a scout. **Requires Bearer auth.**
 
 ---
 
+#### `GET /api/scouts/:wallet/recommendations`
+
+Personalized player recommendations for a scout based on region and position preferences. **Requires Bearer auth (scout role).**
+
+**Query params**
+
+| Param      | Type    | Required | Description                                              |
+|------------|---------|----------|----------------------------------------------------------|
+| `pageSize` | integer | ❌       | Number of recommendations to return (default: `20`, minimum: `1`, maximum: `100`) |
+| `minTier`  | integer | ❌       | Minimum player progress level (0–3)                      |
+
+> **Pagination limits:** `pageSize` must be between 1 and 100. A value outside this range returns HTTP 400 — values are never silently clamped.
+
+**Response `200`**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "player_id": "abc123",
+      "wallet": "GABC...XYZ",
+      "position": "Midfielder",
+      "region": "West Africa",
+      "progress_level": 2
+    }
+  ]
+}
+```
+
+---
+
 ### Validators
 
 #### `POST /api/validators/milestone`
@@ -285,6 +320,20 @@ Pin milestone evidence to IPFS and return the CID. **Requires Bearer auth (valid
 
 List pending milestone approvals. **Requires Bearer auth (validator role).**
 
+Also available as `GET /api/validators/:wallet/milestones/pending` to filter by a specific validator wallet.
+
+**Query params**
+
+| Param      | Type    | Required | Description                                              |
+|------------|---------|----------|----------------------------------------------------------|
+| `region`   | string  | ❌       | Filter by player region                                  |
+| `position` | string  | ❌       | Filter by player position                                |
+| `playerId` | string  | ❌       | Filter by specific player ID                             |
+| `page`     | integer | ❌       | Page number (default: `1`, minimum: `1`)                 |
+| `pageSize` | integer | ❌       | Results per page (default: `20`, minimum: `1`, maximum: `100`) |
+
+> **Pagination limits:** `pageSize` must be between 1 and 100. A value outside this range returns HTTP 400 — values are never silently clamped.
+
 **Response `200`**
 ```json
 {
@@ -297,7 +346,10 @@ List pending milestone approvals. **Requires Bearer auth (validator role).**
       "evidenceUri": "QmEvidence...",
       "submittedAt": 1700000000
     }
-  ]
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
 }
 ```
 
@@ -328,7 +380,21 @@ Platform-wide counts. **Requires Bearer auth (admin role).**
 
 #### `GET /api/admin/events`
 
-All indexed contract events. **Requires Bearer auth.**
+All indexed contract events. **Requires Bearer auth (admin role).**
+
+**Query params**
+
+| Param      | Type    | Required | Description                                              |
+|------------|---------|----------|----------------------------------------------------------|
+| `startDate`| string  | ❌       | ISO date string — filter events on or after this date    |
+| `endDate`  | string  | ❌       | ISO date string — filter events on or before this date   |
+| `eventType`| string  | ❌       | Filter by event type (e.g. `player_registered`)          |
+| `page`     | integer | ❌       | Page number (minimum: `1`)                               |
+| `pageSize` | integer | ❌       | Results per page (minimum: `1`, maximum: `100`)          |
+| `limit`    | integer | ❌       | Alias for `pageSize` (takes precedence if both provided) |
+| `offset`   | integer | ❌       | Row offset (alternative to `page`/`pageSize`)            |
+
+> **Pagination limits:** `pageSize` and `limit` must be between 1 and 100. A value outside this range returns HTTP 400 — values are never silently clamped. The default page size is `20` when neither `limit` nor `pageSize` is provided.
 
 **Response `200`**
 ```json
@@ -341,7 +407,10 @@ All indexed contract events. **Requires Bearer auth.**
       "txHash": "abc...",
       "payload": {}
     }
-  ]
+  ],
+  "total": 50,
+  "limit": 20,
+  "offset": 0
 }
 ```
 
@@ -349,7 +418,7 @@ All indexed contract events. **Requires Bearer auth.**
 
 #### `GET /api/admin/fees`
 
-Fee withdrawal history. **Requires Bearer auth.**
+Fee withdrawal history. **Requires Bearer auth (admin role).**
 
 **Response `200`**
 ```json
@@ -363,6 +432,43 @@ Fee withdrawal history. **Requires Bearer auth.**
       "payload": { "amount": "5000000", "recipient": "GADMIN..." }
     }
   ]
+}
+```
+
+---
+
+#### `GET /api/admin/audit`
+
+Admin audit log of actions performed via the API. **Requires Bearer auth (admin role).**
+
+**Query params**
+
+| Param       | Type    | Required | Description                                              |
+|-------------|---------|----------|----------------------------------------------------------|
+| `startDate` | string  | ❌       | ISO date string — filter logs on or after this date      |
+| `endDate`   | string  | ❌       | ISO date string — filter logs on or before this date     |
+| `action`    | string  | ❌       | Filter by action type (e.g. `milestone_submitted`)       |
+| `limit`     | integer | ❌       | Results per page (default: `20`, minimum: `1`, maximum: `100`) |
+| `offset`    | integer | ❌       | Row offset from start (default: `0`, minimum: `0`)       |
+
+> **Pagination limits:** `limit` must be between 1 and 100. A value outside this range returns HTTP 400 — values are never silently clamped.
+
+**Response `200`**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "action": "milestone_submitted",
+      "admin_wallet": "GADMIN...",
+      "query_params": { "playerId": "abc123" },
+      "created_at": "2024-03-15T12:00:00.000Z"
+    }
+  ],
+  "total": 1,
+  "limit": 20,
+  "offset": 0
 }
 ```
 
