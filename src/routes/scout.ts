@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { getSubscription, getUnlockedContacts, getContactDetails, unlockContact, getPaymentHistory, subscribe, renewSubscription, cancelSubscription, submitTrialOffer, listTrialOffers, createTrialOffer, trialOfferSchema, unlockContactSchema } from '../controllers/scoutController';
 import { getScoutRecommendations } from '../controllers/scoutRecommendationsController';
+import { putScoutNote, getScoutNoteHandler, listScoutNotesHandler } from '../controllers/scoutNotesController';
+import { issueApiKey, listApiKeys, revokeApiKey } from '../controllers/apiKeyController';
+import { addBookmark, removeBookmark, listBookmarks } from '../controllers/scoutBookmarksController';
 import { requireRole } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
 import { walletRateLimit } from '../middleware/rateLimit';
@@ -134,6 +137,87 @@ router.route('/:wallet/recommendations')
     requireRole('scout'),
     getScoutRecommendations,
   )
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+// ─── Private scout notes (#488) ───────────────────────────────────────────────
+
+/**
+ * PUT /api/scouts/:wallet/notes/:playerId
+ * Create or update (upsert) a private note on a player profile.
+ * Only the authoring scout can read or write their notes.
+ *
+ * GET /api/scouts/:wallet/notes/:playerId
+ * Retrieve the authenticated scout's note for a specific player.
+ *
+ * @auth Bearer (scout role required; wallet must match authenticated account)
+ */
+router.route('/:wallet/notes/:playerId')
+  .put(requireRole('scout'), putScoutNote)
+  .get(requireRole('scout'), getScoutNoteHandler)
+  .all(methodNotAllowed(['PUT', 'GET', 'HEAD']));
+
+/**
+ * GET /api/scouts/:wallet/notes
+ * List all private notes for the authenticated scout, ordered newest-first.
+ *
+ * @auth Bearer (scout role required; wallet must match authenticated account)
+ */
+router.route('/:wallet/notes')
+  .get(requireRole('scout'), listScoutNotesHandler)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+// ─── API key management (#490) ────────────────────────────────────────────────
+
+/**
+ * POST /api/scouts/:wallet/api-keys
+ * Issue a new API key for server-to-server integrations. Returns the plaintext
+ * key exactly once; only a salted hash is persisted.
+ *
+ * GET /api/scouts/:wallet/api-keys
+ * List existing API keys (metadata + hash prefix only — no plaintext).
+ *
+ * @auth Bearer (scout role required; wallet must match authenticated account)
+ */
+router.route('/:wallet/api-keys')
+  .post(requireRole('scout'), issueApiKey)
+  .get(requireRole('scout'), listApiKeys)
+  .all(methodNotAllowed(['POST', 'GET', 'HEAD']));
+
+/**
+ * DELETE /api/scouts/:wallet/api-keys/:id
+ * Revoke an existing API key by its row id.
+ *
+ * @auth Bearer (scout role required; wallet must match authenticated account)
+ */
+router.route('/:wallet/api-keys/:id')
+  .delete(requireRole('scout'), revokeApiKey)
+  .all(methodNotAllowed(['DELETE']));
+
+// ─── Scout bookmarks (#487) ───────────────────────────────────────────────────
+
+/**
+ * POST /api/scouts/:wallet/bookmarks/:playerId
+ * Bookmark a player. Idempotent — no error if already bookmarked.
+ * Returns 404 when the player does not exist.
+ *
+ * DELETE /api/scouts/:wallet/bookmarks/:playerId
+ * Remove a bookmark. Returns 404 when the bookmark does not exist.
+ *
+ * @auth Bearer (scout role required; wallet must match authenticated account)
+ */
+router.route('/:wallet/bookmarks/:playerId')
+  .post(requireRole('scout'), addBookmark)
+  .delete(requireRole('scout'), removeBookmark)
+  .all(methodNotAllowed(['POST', 'DELETE']));
+
+/**
+ * GET /api/scouts/:wallet/bookmarks
+ * List all bookmarked players with full profile summaries.
+ *
+ * @auth Bearer (scout role required; wallet must match authenticated account)
+ */
+router.route('/:wallet/bookmarks')
+  .get(requireRole('scout'), listBookmarks)
   .all(methodNotAllowed(['GET', 'HEAD']));
 
 export default router;

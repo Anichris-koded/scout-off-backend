@@ -33,8 +33,44 @@ function verifyToken(token: string): AuthPayload {
  * Middleware that verifies any valid JWT Bearer token.
  * Attaches `req.account` (Stellar public key) and `req.role` on success.
  * Returns 401 if the token is missing, invalid, expired, or revoked.
+ *
+ * Also accepts an X-API-Key header as an alternative to a JWT Bearer token.
+ * When an X-API-Key is provided and verified, req.account is set to the
+ * associated scout wallet and req.role is set to 'scout'.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  // ── X-API-Key path ──────────────────────────────────────────────────────────
+  const apiKeyHeader = req.headers['x-api-key'];
+  if (apiKeyHeader && typeof apiKeyHeader === 'string') {
+    try {
+      // Lazy require avoids a circular module dependency at load time.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { resolveApiKey } = require('../controllers/apiKeyController') as {
+        resolveApiKey: (rawKey: string) => { scout_wallet: string; id: number } | null;
+      };
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { touchApiKeyLastUsed } = require('../db') as {
+        touchApiKeyLastUsed: (id: number) => void;
+      };
+      const resolved = resolveApiKey(apiKeyHeader);
+      if (!resolved) {
+        logger.warn({ method: req.method, path: req.path, error: 'Invalid or revoked API key' });
+        sendUnauthorized(res, 'Invalid or revoked API key');
+        return;
+      }
+      try { touchApiKeyLastUsed(resolved.id); } catch { /* best-effort */ }
+      req.account = resolved.scout_wallet;
+      req.role = 'scout';
+      next();
+      return;
+    } catch {
+      logger.warn({ method: req.method, path: req.path, error: 'API key auth error' });
+      sendUnauthorized(res, 'Invalid or revoked API key');
+      return;
+    }
+  }
+
+  // ── JWT Bearer path ─────────────────────────────────────────────────────────
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     logger.warn({ method: req.method, path: req.path, error: 'Missing auth token' });
