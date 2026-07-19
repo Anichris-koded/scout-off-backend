@@ -660,3 +660,209 @@ export function incrementPendingPinAttempts(id: number): void {
   const sql = 'UPDATE pending_pins SET attempts = attempts + 1, last_tried = ? WHERE id = ?';
   timedQuery(sql, () => getDb().prepare(sql).run(new Date().toISOString(), id));
 }
+
+// ─── Scout player notes helpers (#488) ───────────────────────────────────────
+
+export interface ScoutPlayerNoteRow {
+  id: number;
+  scout_wallet: string;
+  player_id: string;
+  note_text: string;
+  updated_at: number;
+}
+
+/**
+ * Create or update a private note for a scout on a specific player.
+ * Uses upsert semantics: calling twice for the same (scout_wallet, player_id)
+ * pair overwrites the note rather than creating a duplicate row.
+ */
+export function upsertScoutNote(p: {
+  scout_wallet: string;
+  player_id: string;
+  note_text: string;
+  updated_at: number;
+}): void {
+  const sql = `
+    INSERT INTO scout_player_notes (scout_wallet, player_id, note_text, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(scout_wallet, player_id) DO UPDATE SET
+      note_text  = excluded.note_text,
+      updated_at = excluded.updated_at
+  `;
+  timedQuery(sql, () =>
+    getDb().prepare(sql).run(p.scout_wallet, p.player_id, p.note_text, p.updated_at),
+  );
+}
+
+/**
+ * Retrieve a single private note by scout wallet + player id.
+ * Returns null when no note exists.
+ */
+export function getScoutNote(
+  scoutWallet: string,
+  playerId: string,
+): ScoutPlayerNoteRow | null {
+  const sql =
+    'SELECT * FROM scout_player_notes WHERE scout_wallet = ? AND player_id = ? LIMIT 1';
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(scoutWallet, playerId) as ScoutPlayerNoteRow | undefined) ?? null,
+  );
+}
+
+/**
+ * List all private notes authored by a scout, ordered newest-first.
+ */
+export function getScoutNotes(scoutWallet: string): ScoutPlayerNoteRow[] {
+  const sql =
+    'SELECT * FROM scout_player_notes WHERE scout_wallet = ? ORDER BY updated_at DESC';
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(scoutWallet) as ScoutPlayerNoteRow[],
+  );
+}
+
+// ─── API key helpers (#490) ───────────────────────────────────────────────────
+
+export interface ApiKeyRow {
+  id: number;
+  key_hash: string;
+  scout_wallet: string;
+  label: string;
+  created_at: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+}
+
+/**
+ * Persist a new API key.  Only the salted hash is stored; the caller must
+ * have already generated the hash before calling this function.
+ * Returns the new row id.
+ */
+export function insertApiKey(p: {
+  key_hash: string;
+  scout_wallet: string;
+  label: string;
+  created_at: number;
+}): number {
+  const sql = `
+    INSERT INTO api_keys (key_hash, scout_wallet, label, created_at)
+    VALUES (?, ?, ?, ?)
+  `;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(p.key_hash, p.scout_wallet, p.label, p.created_at);
+    return info.lastInsertRowid as number;
+  });
+}
+
+/**
+ * List all non-revoked API keys for a scout wallet.
+ */
+export function listApiKeysByWallet(scoutWallet: string): ApiKeyRow[] {
+  const sql = `
+    SELECT * FROM api_keys
+    WHERE scout_wallet = ?
+    ORDER BY created_at DESC
+  `;
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(scoutWallet) as ApiKeyRow[],
+  );
+}
+
+/**
+ * Revoke an API key by its row id.
+ * Only revokes keys belonging to the given scout wallet for security.
+ * Returns true when a row was updated, false when not found.
+ */
+export function revokeApiKeyById(id: number, scoutWallet: string): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const sql = `
+    UPDATE api_keys SET revoked_at = ?
+    WHERE id = ? AND scout_wallet = ? AND revoked_at IS NULL
+  `;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(now, id, scoutWallet);
+    return info.changes > 0;
+  });
+}
+
+/**
+ * Look up an API key row by its full hash value (including salt prefix).
+ * Returns null when not found or already revoked.
+ */
+export function getApiKeyByHash(keyHash: string): ApiKeyRow | null {
+  const sql = `SELECT * FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL LIMIT 1`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(keyHash) as ApiKeyRow | undefined) ?? null,
+  );
+}
+
+/**
+ * Return all active (non-revoked) API keys across all scouts.
+ * Used by auth middleware to verify an incoming X-API-Key header.
+ */
+export function getAllActiveApiKeys(): ApiKeyRow[] {
+  const sql = `SELECT * FROM api_keys WHERE revoked_at IS NULL`;
+  return timedQuery(sql, () => getDb().prepare(sql).all() as ApiKeyRow[]);
+}
+
+/**
+ * Update the last_used_at timestamp for an API key.
+ */
+export function touchApiKeyLastUsed(id: number): void {
+  const now = Math.floor(Date.now() / 1000);
+  const sql = `UPDATE api_keys SET last_used_at = ? WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(now, id));
+}
+
+// ─── Scout bookmarks helpers (#487) ──────────────────────────────────────────
+
+export interface ScoutBookmarkRow {
+  id: number;
+  scout_wallet: string;
+  player_id: string;
+  created_at: number;
+}
+
+/**
+ * Insert a bookmark.  Uses INSERT OR IGNORE so re-bookmarking is idempotent.
+ * Returns true when a new row was inserted, false when it already existed.
+ */
+export function insertBookmark(p: {
+  scout_wallet: string;
+  player_id: string;
+  created_at: number;
+}): boolean {
+  const sql = `
+    INSERT OR IGNORE INTO scout_bookmarks (scout_wallet, player_id, created_at)
+    VALUES (?, ?, ?)
+  `;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(p.scout_wallet, p.player_id, p.created_at);
+    return info.changes > 0;
+  });
+}
+
+/**
+ * Delete a bookmark.
+ * Returns true when a row was deleted, false when it did not exist.
+ */
+export function deleteBookmark(scoutWallet: string, playerId: string): boolean {
+  const sql = `DELETE FROM scout_bookmarks WHERE scout_wallet = ? AND player_id = ?`;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(scoutWallet, playerId);
+    return info.changes > 0;
+  });
+}
+
+/**
+ * List all bookmarks for a scout, ordered by creation time (newest first).
+ */
+export function getBookmarksByScout(scoutWallet: string): ScoutBookmarkRow[] {
+  const sql = `
+    SELECT * FROM scout_bookmarks
+    WHERE scout_wallet = ?
+    ORDER BY created_at DESC
+  `;
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(scoutWallet) as ScoutBookmarkRow[],
+  );
+}
