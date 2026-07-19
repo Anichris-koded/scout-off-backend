@@ -10,7 +10,7 @@ import {
   type Player,
   type FilterOptions,
   type DashboardState,
-} from '../../../src/frontend/components/scout/ScoutDashboardContent';
+} from '../../../../src/frontend/components/scout/ScoutDashboardContent';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
