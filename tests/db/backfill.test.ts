@@ -7,7 +7,7 @@
  * edge case where the reset should be a no-op.
  */
 
-import { initDb, getLastLedger, setLastLedger, getDb } from '../../src/db';
+import { getLastLedger, setLastLedger, getDb } from '../../src/db';
 
 describe('backfill core logic (scripts/backfill.js)', () => {
   beforeEach(() => {
