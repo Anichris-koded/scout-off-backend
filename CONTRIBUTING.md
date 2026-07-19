@@ -335,43 +335,14 @@ We track ~125 active issues. Use these guidelines to help us prioritize efficien
    Related to #456
    ```
 
-### Issue Template
+### Issue Templates
 
-```markdown
-## Summary
-One-line description.
-
-## Category
-[ ] Bug [ ] Feature [ ] Performance [ ] Documentation
-[ ] Refactor [ ] Infra [ ] Security [ ] Test
-
-## Priority (Estimated)
-[ ] P0 – Critical [ ] P1 – High [ ] P2 – Medium [ ] P3 – Low
-
-## Environment
-- OS: [macOS/Linux/Windows]
-- Node: [version]
-- npm: [version]
-- Network: [testnet/mainnet/local]
-
-## Description
-Detailed explanation of the issue or proposal.
-
-## Steps (for bugs)
-1.
-2.
-3.
-
-## Expected vs. Actual (for bugs)
-- Expected: …
-- Actual: …
-
-## Proposed Solution (for features)
-How would this be implemented?
-
-## Related Issues
-Fixes #XXX / Related to #YYY
-```
+Structured issue templates are available at `.github/ISSUE_TEMPLATE/`.
+When you click **New issue** on GitHub, choose the appropriate template
+— **Bug report** for bugs, **Feature request** for new capabilities.
+The templates prompt for the sections outlined above (repro steps,
+environment, acceptance criteria, etc.) so issues arrive with
+consistent detail.
 
 ## Getting Help
 
