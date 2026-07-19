@@ -375,8 +375,10 @@ export async function cancelSubscriptionOnChain(
   }
 
   if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-    // Inspect the result XDR for contract-level error codes
-    const resultMeta = (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse & { resultMetaXdr?: string }).resultMetaXdr ?? '';
+    // Inspect the result XDR for contract-level error codes.
+    // Cast through unknown because GetFailedTransactionResponse and
+    // GetSuccessfulTransactionResponse share no overlapping status type.
+    const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
     if (resultMeta.includes('#8') || /not.?subscribed/i.test(resultMeta)) {
       throw new SubscriptionError('Scout has no active on-chain subscription', 'NOT_SUBSCRIBED');
     }
