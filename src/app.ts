@@ -21,6 +21,7 @@ import { metricsMiddleware, createMetricsHandler } from './middleware/metrics';
 import { requestTimeout } from './middleware/timeout';
 import { indexerLedgerLag } from './services/indexer';
 import { getDb } from './db';
+import { getVersionInfo } from './version';
 
 /** Probe the SQLite database with a lightweight SELECT 1.
  *  Resolves 'ok' or 'error'; never rejects.
@@ -66,6 +67,10 @@ app.use(express.json({ limit: config.bodyLimit.json }));
 app.use(requestLogger);
 // Collect per-route request counts, latency, and error counts for /metrics.
 app.use(metricsMiddleware);
+
+app.get('/version', (_req, res) => {
+  res.json(getVersionInfo());
+});
 
 app.get('/health', async (_req, res) => {
   const healthStatus: Record<string, 'ok' | 'error' | 'disabled'> = {};

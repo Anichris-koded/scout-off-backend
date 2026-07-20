@@ -139,6 +139,7 @@ For S3, configure an [Object Lifecycle rule](https://docs.aws.amazon.com/AmazonS
 |---|---|
 | `GET /health` | Liveness check; includes Stellar RPC status |
 | `GET /ready` | Readiness probe; checks IPFS connectivity |
+| `GET /version` | Deployed package version and git commit SHA |
 
 Configure your load balancer or orchestrator to poll `/health` every 30 seconds.  
 Alert on consecutive failures (≥ 2) to catch Stellar RPC or IPFS outages early.

@@ -57,6 +57,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Write build commit
+        run: echo "${{ github.sha }}" > BUILD_COMMIT
+
       - name: Package release
         run: |
           tar czf release.tar.gz \
