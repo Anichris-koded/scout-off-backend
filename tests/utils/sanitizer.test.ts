@@ -136,7 +136,7 @@ describe('sanitizeInput', () => {
     it('removes all control characters from 0-31', () => {
       let input = 'Test';
       for (let i = 0; i <= 31; i++) {
-        input = `Before\x${i.toString(16).padStart(2, '0')}After`;
+        input = 'Before' + String.fromCharCode(i) + 'After';
         const result = sanitizeInput(input);
         expect(result).toBe('BeforeAfter');
       }

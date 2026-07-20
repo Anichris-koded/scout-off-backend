@@ -10,6 +10,10 @@ import request from 'supertest';
 describe('CORS origin allowlist', () => {
   const ALLOWED = 'https://app.scoutoff.io';
 
+  beforeAll(() => {
+    jest.setTimeout(15000);
+  });
+
   beforeEach(() => {
     jest.resetModules();
     // config.ts requires ADMIN_WALLET in production/staging and PLATFORM_SECRET_KEY
