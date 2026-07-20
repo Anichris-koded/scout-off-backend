@@ -4,5 +4,6 @@ dist/
 *.js.map
 contracts/target/
 contracts/**/test_snapshots/
+coverage/
 BUILD_COMMIT
 
