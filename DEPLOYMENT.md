@@ -76,7 +76,43 @@ DB_PATH=/data/scout-off.db BACKUP_DEST=s3://my-bucket/scout-off-backups bash scr
 DB_PATH=/data/scout-off.db BACKUP_DEST=gs://my-bucket/scout-off-backups bash scripts/backup-db.sh
 ```
 
-The script exits with code `1` and prints an error to stderr on any failure (file missing, CLI not found, copy error).
+The script exits with code `1` and prints an error to stderr on any failure (file missing, CLI not found, copy error, or verification failure).
+
+Every backup is verified immediately after creation:
+
+1. The script captures row counts for `players`, `events`, and `migrations` from the live database.
+2. It writes a `.counts` sidecar file alongside the backup (same destination prefix).
+3. It runs `scripts/verify-backup.sh`, which copies the backup to a scratch directory, runs `PRAGMA integrity_check`, and confirms the key table row counts match the sidecar.
+
+Requires the `sqlite3` CLI on the host running backups (`python3` is used as a fallback when `sqlite3` is unavailable).
+
+### Restore-verification drills
+
+Run periodic drills against historical backups to confirm they remain restorable. Use `--verify-only` (delegates to `scripts/verify-backup.sh`) or call the verifier directly:
+
+```bash
+# Local backup + sidecar created at backup time
+bash scripts/backup-db.sh --verify-only /var/backups/scout-off/scout-off-20250720T120000Z.db
+
+# S3 (downloads backup and .counts sidecar automatically)
+bash scripts/backup-db.sh --verify-only s3://my-bucket/scout-off-backups/scout-off-20250720T120000Z.db
+
+# GCS
+bash scripts/backup-db.sh --verify-only gs://my-bucket/scout-off-backups/scout-off-20250720T120000Z.db
+
+# Direct verifier with explicit expected counts (e.g. if the sidecar was lost)
+EXPECT_PLAYERS=120 EXPECT_EVENTS=5400 EXPECT_MIGRATIONS=18 \
+  bash scripts/verify-backup.sh /var/backups/scout-off/scout-off-20250720T120000Z.db
+```
+
+Suggested schedule: weekly verification of the most recent backup, plus a monthly spot-check of a random older backup. Failed verification exits non-zero — wire alerts to your cron/systemd log monitoring the same way as backup failures.
+
+Example weekly cron (`/etc/cron.d/scout-off-backup-verify`):
+
+```cron
+0 3 * * 0 ubuntu LATEST=$(aws s3 ls s3://my-bucket/scout-off-backups/ | awk '/\.db$/ { print $4 }' | sort | tail -1) && \
+  bash /opt/scout-off/scripts/backup-db.sh --verify-only "s3://my-bucket/scout-off-backups/${LATEST}" >> /var/log/scout-off-backup-verify.log 2>&1
+```
 
 ### Scheduling via cron
 
@@ -142,6 +178,7 @@ For S3, configure an [Object Lifecycle rule](https://docs.aws.amazon.com/AmazonS
 |---|---|
 | `GET /health` | Liveness check; includes Stellar RPC status |
 | `GET /ready` | Readiness probe; checks IPFS connectivity |
+| `GET /version` | Deployed package version and git commit SHA |
 
 Configure your load balancer or orchestrator to poll `/health` every 30 seconds.  
 Alert on consecutive failures (≥ 2) to catch Stellar RPC or IPFS outages early.

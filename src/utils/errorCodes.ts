@@ -38,6 +38,7 @@ export const ErrorCode = {
   SUBSCRIPTION_REQUIRED: 'SUBSCRIPTION_REQUIRED',
   CONFLICT:              'CONFLICT',
   WALLET_MISMATCH:       'WALLET_MISMATCH',
+  FEATURE_DISABLED:      'FEATURE_DISABLED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

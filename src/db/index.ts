@@ -89,6 +89,13 @@ export function getDb(): Database.Database {
   return _db;
 }
 
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}
+
 // ─── State helpers ────────────────────────────────────────────────────────────
 
 export function getLastLedger(): number {
@@ -942,5 +949,45 @@ export function deleteSavedSearch(id: number, scoutWallet: string): boolean {
   return timedQuery(sql, () => {
     const info = getDb().prepare(sql).run(id, scoutWallet);
     return info.changes > 0;
+  });
+}
+
+// ─── Feature flags (#494) ─────────────────────────────────────────────────────
+
+export interface FeatureFlagRow {
+  name: string;
+  enabled: number;
+  updated_at: number;
+  updated_by: string;
+}
+
+export function getAllFeatureFlags(): FeatureFlagRow[] {
+  const sql = `SELECT * FROM feature_flags ORDER BY name`;
+  return timedQuery(sql, () => getDb().prepare(sql).all() as FeatureFlagRow[]);
+}
+
+export function getFeatureFlag(name: string): FeatureFlagRow | null {
+  const sql = `SELECT * FROM feature_flags WHERE name = ?`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(name) as FeatureFlagRow | undefined) ?? null,
+  );
+}
+
+export function upsertFeatureFlag(p: {
+  name: string;
+  enabled: number;
+  updated_at: number;
+  updated_by: string;
+}): void {
+  const sql = `
+    INSERT INTO feature_flags (name, enabled, updated_at, updated_by)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      enabled = excluded.enabled,
+      updated_at = excluded.updated_at,
+      updated_by = excluded.updated_by
+  `;
+  timedQuery(sql, () => {
+    getDb().prepare(sql).run(p.name, p.enabled, p.updated_at, p.updated_by);
   });
 }
