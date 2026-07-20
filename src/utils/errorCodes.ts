@@ -39,6 +39,10 @@ export const ErrorCode = {
   CONFLICT:              'CONFLICT',
   WALLET_MISMATCH:       'WALLET_MISMATCH',
   FEATURE_DISABLED:      'FEATURE_DISABLED',
+
+  // ── Multi-sig administration ───────────────────────────────────────────────
+  EXPIRED_ACTION:        'EXPIRED_ACTION',
+  ACTION_EXECUTED:       'ACTION_EXECUTED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
