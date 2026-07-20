@@ -666,7 +666,7 @@ Currently checks: **IPFS (Pinata)** storage connectivity and the **SQLite databa
 | `/health` | Stellar RPC (`SOROBAN_RPC_URL`) | `src/services/stellar.ts` — `stellarHealth()` |
 | `/health` | SQLite database | `src/db` — `getDb()` + `SELECT 1` probe with 2 s timeout |
 | `/ready` | IPFS / Pinata (`PINATA_API_KEY`) | `src/services/ipfs.ts` — `checkHealth()` |
-| `/ready` | SQLite database | `src/db` — `getDb()` + `SELECT 1` probe with 2 s timeout |
+| `/ready` | SQLite database | `src/db` — `getDb()` + heartbeat-row upsert (writability) with 2 s timeout |
 
 Both external dependency checks are stubbed in tests — see `tests/routes/health.test.ts`.
 
