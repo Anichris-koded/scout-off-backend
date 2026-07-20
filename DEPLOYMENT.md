@@ -4,6 +4,9 @@
 
 Copy `.env.example` to `.env` and fill in all required values before starting the server.
 
+> [!NOTE]
+> For instructions and policies on managing, securing, and rotating long-lived secrets (such as JWT secrets, Pinata credentials, and platform signing keys), see the [Secrets Rotation Policy](docs/secrets-rotation.md).
+
 | Variable | Required | Notes |
 |---|---|---|
 | `CONTRACT_ID` | ✅ | Deployed Soroban contract address |
@@ -139,6 +142,7 @@ For S3, configure an [Object Lifecycle rule](https://docs.aws.amazon.com/AmazonS
 |---|---|
 | `GET /health` | Liveness check; includes Stellar RPC status |
 | `GET /ready` | Readiness probe; checks IPFS connectivity |
+| `GET /version` | Deployed package version and git commit SHA |
 
 Configure your load balancer or orchestrator to poll `/health` every 30 seconds.  
 Alert on consecutive failures (≥ 2) to catch Stellar RPC or IPFS outages early.

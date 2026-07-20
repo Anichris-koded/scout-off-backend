@@ -89,6 +89,13 @@ export function getDb(): Database.Database {
   return _db;
 }
 
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}
+
 // ─── State helpers ────────────────────────────────────────────────────────────
 
 export function getLastLedger(): number {
