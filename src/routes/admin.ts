@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import express from 'express';
 import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, importValidators } from '../controllers/adminController';
+import { getFeatureFlags, updateFeatureFlag } from '../controllers/featureFlagsController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
 import { ipAllowlistMiddleware } from '../middleware/ipAllowlist';
@@ -249,5 +250,23 @@ router.route('/indexer/reindex')
 router.route('/validators/:wallet/stats')
   .get(requireRole('admin'), getValidatorStatsEndpoint)
   .all(methodNotAllowed(['GET', 'HEAD']));
+
+/**
+ * GET /api/admin/feature-flags
+ *
+ * Returns all runtime feature flags and their current enabled state.
+ *
+ * PUT /api/admin/feature-flags
+ *
+ * Updates a feature flag without restarting the process.
+ *
+ * @body { name: string, enabled: boolean }
+ * @response 200 { success: true, data: FeatureFlag }
+ * @auth Bearer (admin role required)
+ */
+router.route('/feature-flags')
+  .get(requireRole('admin'), getFeatureFlags)
+  .put(requireRole('admin'), updateFeatureFlag)
+  .all(methodNotAllowed(['GET', 'PUT', 'HEAD']));
 
 export default router;
