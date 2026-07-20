@@ -40,6 +40,29 @@ async function probeDb(timeoutMs = 2_000): Promise<'ok' | 'error'> {
   });
 }
 
+/** Probe SQLite writability with a heartbeat-row upsert into indexer_state.
+ *  Catches disk-full/permissions regressions that a read-only SELECT 1 would miss.
+ *  Resolves 'ok' or 'error'; never rejects.
+ *  A configurable timeout (default 2 s) guards against a locked DB hanging the readiness check.
+ */
+async function probeDbWritable(timeoutMs = 2_000): Promise<'ok' | 'error'> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('error'), timeoutMs);
+    try {
+      getDb()
+        .prepare(
+          "INSERT INTO indexer_state (key, value) VALUES ('health_heartbeat', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .run(String(Date.now()));
+      clearTimeout(timer);
+      resolve('ok');
+    } catch {
+      clearTimeout(timer);
+      resolve('error');
+    }
+  });
+}
+
 const app = express();
 // Disable Express's automatic ETag on every response — it would also tag
 // error bodies (e.g. 404s). ETags are set explicitly where conditional GET
@@ -85,7 +108,7 @@ app.get('/health', async (_req, res) => {
 async function checkReadiness(): Promise<Record<string, 'ok' | 'unavailable' | 'disabled'>> {
   const services: Record<string, 'ok' | 'unavailable' | 'disabled'> = {};
 
-  services.db = (await probeDb()) === 'ok' ? 'ok' : 'unavailable';
+  services.db = (await probeDbWritable()) === 'ok' ? 'ok' : 'unavailable';
 
   try {
     await checkHealth();
