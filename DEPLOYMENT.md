@@ -4,6 +4,9 @@
 
 Copy `.env.example` to `.env` and fill in all required values before starting the server.
 
+> [!NOTE]
+> For instructions and policies on managing, securing, and rotating long-lived secrets (such as JWT secrets, Pinata credentials, and platform signing keys), see the [Secrets Rotation Policy](docs/secrets-rotation.md).
+
 | Variable | Required | Notes |
 |---|---|---|
 | `CONTRACT_ID` | ✅ | Deployed Soroban contract address |
