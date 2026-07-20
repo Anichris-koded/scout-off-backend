@@ -36,6 +36,15 @@ jest.mock('../../src/db', () => ({
   dbCancelSubscription: jest.fn(),
   getIdempotencyRecord: jest.fn().mockReturnValue(null),
   saveIdempotencyRecord: jest.fn(),
+  insertPendingAdminAction: jest.fn(),
+  getPendingAdminActionById: jest.fn().mockReturnValue(null),
+  getPendingAdminActionsByStatus: jest.fn().mockReturnValue([]),
+  updatePendingAdminActionStatus: jest.fn(),
+  incrementActionSignatures: jest.fn(),
+  expireStalePendingAdminActions: jest.fn().mockReturnValue(0),
+  insertAdminActionSignature: jest.fn(),
+  getAdminActionSignature: jest.fn().mockReturnValue(null),
+  getAdminActionSignatures: jest.fn().mockReturnValue([]),
 }));
 
 jest.mock('../../src/services/indexer', () => ({
