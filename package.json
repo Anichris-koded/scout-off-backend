@@ -55,29 +55,51 @@
     "typescript": "5.4.5"
   },
   "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node",
-    "testMatch": [
-      "**/tests/**/*.test.ts"
-    ],
-    "setupFiles": [
-      "<rootDir>/tests/setup.ts"
-    ],
-    "moduleNameMapper": {
-      "^@paralleldrive/cuid2$": "<rootDir>/__mocks__/@paralleldrive/cuid2.js"
-    },
-    "globals": {
-      "ts-jest": {
-        "diagnostics": false
+    "projects": [
+      {
+        "displayName": "unit",
+        "preset": "ts-jest",
+        "testEnvironment": "node",
+        "testMatch": [
+          "**/tests/**/*.test.ts",
+          "!**/tests/scripts/**"
+        ],
+        "setupFiles": [
+          "<rootDir>/tests/setup.ts"
+        ],
+        "moduleNameMapper": {
+          "^@paralleldrive/cuid2$": "<rootDir>/__mocks__/@paralleldrive/cuid2.js"
+        },
+        "globals": {
+          "ts-jest": {
+            "diagnostics": false
+          }
+        },
+        "coverageThreshold": {
+          "global": {
+            "branches": 70,
+            "functions": 70,
+            "lines": 70,
+            "statements": 70
+          }
+        }
+      },
+      {
+        "displayName": "scripts",
+        "preset": "ts-jest",
+        "testEnvironment": "node",
+        "testMatch": [
+          "**/tests/scripts/**/*.test.ts"
+        ],
+        "setupFiles": [
+          "<rootDir>/tests/setup-shell.ts"
+        ],
+        "globals": {
+          "ts-jest": {
+            "diagnostics": false
+          }
+        }
       }
-    },
-    "coverageThreshold": {
-      "global": {
-        "branches": 70,
-        "functions": 70,
-        "lines": 70,
-        "statements": 70
-      }
-    }
+    ]
   }
 }
