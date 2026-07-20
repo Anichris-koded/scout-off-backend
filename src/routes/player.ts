@@ -14,6 +14,8 @@ import {
   registerSchema,
   filterSchema,
   updatePlayerSchema,
+  deactivatePlayerEndpoint,
+  reactivatePlayerEndpoint,
 } from "../controllers/playerController";
 import { getPlayerHistory } from "../controllers/playerHistoryController";
 import { acceptTrialOffer, rejectTrialOffer, rejectOfferSchema } from "../controllers/trialOfferController";
@@ -42,7 +44,7 @@ router.route("/register")
   .all(methodNotAllowed(['POST']));
 
 router.route("/:playerId")
-  .get(getPlayer)
+  .get(optionalAuth, getPlayer)
   .put(
     requireRole("player"),
     requireOwner,
@@ -52,8 +54,24 @@ router.route("/:playerId")
   .all(methodNotAllowed(['GET', 'PUT', 'HEAD']));
 
 router.route("/:playerId/milestones")
-  .get(getPlayerMilestones)
+  .get(optionalAuth, getPlayerMilestones)
   .all(methodNotAllowed(['GET', 'HEAD']));
+
+router.route("/:playerId/deactivate")
+  .post(
+    requireRole("player"),
+    requireOwner,
+    deactivatePlayerEndpoint,
+  )
+  .all(methodNotAllowed(['POST']));
+
+router.route("/:playerId/reactivate")
+  .post(
+    requireRole("player"),
+    requireOwner,
+    reactivatePlayerEndpoint,
+  )
+  .all(methodNotAllowed(['POST']));
 
 /**
  * GET /api/players/:playerId/history
