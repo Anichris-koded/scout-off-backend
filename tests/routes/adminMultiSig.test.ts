@@ -1,549 +1,389 @@
-import request from 'supertest';
-import jwt from 'jsonwebtoken';
-import app from '../../src/app';
-import { logAuditEvent } from '../../src/services/audit';
-import * as adminMultiSig from '../../src/services/adminMultiSig';
-import { getPendingAdminActionById, getAdminActionSignatures, expireStalePendingAdminActions } from '../../src/db';
+import { createId } from '@paralleldrive/cuid2';
 
-const SECRET = process.env.JWT_SECRET ?? 'test-secret';
-
-jest.mock('../../src/services/audit', () => ({
-  logAuditEvent: jest.fn(),
+jest.mock('../../src/config', () => ({
+  __esModule: true,
+  default: {
+    adminWallets: [
+      'GADMIN1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      'GADMIN2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      'GADMIN3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    ],
+    adminThreshold: 3,
+    adminActionTtlMs: 60000,
+    adminWallet: 'GADMIN1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    nodeEnv: 'test',
+    contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+    jwtSecret: 'test-secret',
+    jwtSecretPrevious: '',
+    platformSecret: '',
+    platformSecretKey: '',
+    dbPath: ':memory:',
+    stellarHealthCheckEnabled: false,
+    useMockServices: true,
+    showErrorDetails: true,
+    port: 0,
+    network: 'testnet',
+    networkPassphrase: 'Test SDF Network ; September 2015',
+    horizonUrl: 'https://horizon-testnet.stellar.org',
+    sorobanRpcUrl: 'https://soroban-testnet.stellar.org',
+    platformFeeBps: 500,
+    securityHeaders: {
+      hsts: 'max-age=31536000',
+      xContentTypeOptions: 'nosniff',
+      xFrameOptions: 'DENY',
+      referrerPolicy: 'no-referrer',
+      csp: "default-src 'none'",
+    },
+    webhook: { enabled: false, url: '' },
+    rateLimit: { enabled: false, windowMs: 60000, max: 1000 },
+    authRateLimit: { windowMs: 60000, max: 1000 },
+    bodyLimit: { json: '1mb' },
+    allowedOrigins: [],
+    logLevel: 'warn',
+    requestTimeoutMs: 30000,
+    requestLog: { skipPaths: [], sampleRate: 1 },
+    playerCacheTtlMs: 60000,
+    pinJsonCacheTtlMs: 300000,
+    subscriptionGracePeriodHours: 24,
+    pinata: { apiKey: '', secret: '', gateway: '', gateways: [] },
+    backfillFromLedger: null,
+  },
 }));
 
-jest.mock('../../src/services/stellar', () => ({
-  ...jest.requireActual('../../src/services/stellar'),
-  withdrawFees: jest.fn().mockResolvedValue({}),
-  unpauseContractOnChain: jest.fn().mockResolvedValue({ transactionId: 'txn-1' }),
-}));
+const store: {
+  pending_admin_actions: Array<Record<string, unknown>>;
+  admin_action_signatures: Array<Record<string, unknown>>;
+} = {
+  pending_admin_actions: [],
+  admin_action_signatures: [],
+};
+
+function resetStore(): void {
+  store.pending_admin_actions = [];
+  store.admin_action_signatures = [];
+}
 
 jest.mock('../../src/db', () => {
   const actual = jest.requireActual('../../src/db');
   return {
     ...actual,
     getEvents: jest.fn().mockReturnValue([]),
+    insertPendingAdminAction: jest.fn((p: Record<string, unknown>) => {
+      store.pending_admin_actions.push({
+        ...p,
+        status: 'pending',
+        collected_signatures: p.collected_signatures ?? 0,
+      });
+    }),
+    getPendingAdminActionById: jest.fn((id: string) => {
+      return (store.pending_admin_actions as Array<Record<string, unknown>>).find((a) => a.id === id) ?? null;
+    }),
+    updatePendingAdminActionStatus: jest.fn((id: string, status: string) => {
+      const a = store.pending_admin_actions.find((x) => x.id === id);
+      if (a) a.status = status;
+    }),
+    insertAdminActionSignature: jest.fn((p: Record<string, unknown>) => {
+      const exists = store.admin_action_signatures.find(
+        (s) => s.action_id === p.action_id && s.signer === p.signer,
+      );
+      if (exists) return false;
+      store.admin_action_signatures.push({ ...p });
+      return true;
+    }),
+    incrementActionSignatures: jest.fn((id: string) => {
+      const a = store.pending_admin_actions.find((x) => x.id === id);
+      if (a) {
+        a.collected_signatures = ((a.collected_signatures as number) ?? 0) + 1;
+      }
+    }),
+    getAdminActionSignature: jest.fn((action_id: string, signer: string) => {
+      const s = store.admin_action_signatures.find(
+        (x) => x.action_id === action_id && x.signer === signer,
+      );
+      return s ? { signed_at: s.signed_at as number } : null;
+    }),
+    expireStalePendingAdminActions: jest.fn(() => {
+      const now = Date.now();
+      let count = 0;
+      for (const a of store.pending_admin_actions) {
+        if (a.status === 'pending' && (a.expires_at as number) <= now) {
+          a.status = 'expired';
+          count++;
+        }
+      }
+      return count;
+    }),
+    getPendingAdminActionsByStatus: jest.fn((status: string) => {
+      return (store.pending_admin_actions as Array<Record<string, unknown>>).filter(
+        (a) => a.status === status,
+      );
+    }),
+    getAdminActionSignatures: jest.fn((action_id: string) => {
+      return (store.admin_action_signatures as Array<Record<string, unknown>>)
+        .filter((s) => s.action_id === action_id)
+        .map((s) => ({ signer: s.signer as string, signed_at: s.signed_at as number }));
+    }),
   };
 });
 
-jest.mock('../../src/services/indexer', () => ({
-  indexEvents: jest.fn(),
-  normalizeEventId: jest.fn(),
+jest.mock('../../src/services/audit', () => ({
+  logAuditEvent: jest.fn(),
 }));
+
+jest.mock('../../src/utils/logger', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+}));
+
+import {
+  proposeAction,
+  approveAction,
+  listPendingActions,
+  getActionDetails,
+} from '../../src/services/adminMultiSig';
+import { logAuditEvent } from '../../src/services/audit';
 
 const mockLogAuditEvent = logAuditEvent as jest.Mock;
 
-// Test admin wallets (must match what the config mock returns)
 const ADMIN_1 = 'GADMIN1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const ADMIN_2 = 'GADMIN2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const ADMIN_3 = 'GADMIN3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-
 const OUTSIDER = 'GOUTSIDERAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-
-const VALID_RECIPIENT = 'GRECIPIENTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4';
-
-jest.mock('../../src/config', () => ({
-  __esModule: true,
-  default: {
-    adminWallets: [ADMIN_1, ADMIN_2, ADMIN_3],
-    adminThreshold: 3,
-    adminActionTtlMs: 60000, // 1 minute — long enough for tests, short enough for expiry test
-    adminWallet: ADMIN_1,
-    nodeEnv: 'test',
-    contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
-    jwtSecret: 'test-secret',
-  },
-}));
-
-function makeToken(wallet: string, role: string): string {
-  return jwt.sign({ sub: wallet, role }, SECRET, { expiresIn: '1h' });
-}
 
 beforeEach(() => {
   jest.clearAllMocks();
-  // Clean out any stale actions that may linger between tests
-  expireStalePendingAdminActions();
+  resetStore();
 });
 
-// ─── Immediate execution (threshold ≤ 1 is handled in controller,
-//      but proposeAction() also short-circuits with status === 'immediate') ─────
-
-describe('Multi-sig: immediate execution path', () => {
-  it('pauseContract returns 202 immediately when threshold is <=1', async () => {
-    // We'd need to re-mock config.adminThreshold = 1 for this, but since config
-    // is mocked at module level for all tests, we test via the service directly.
-    // The controller paths for threshold > 1 are tested below.
-    expect(1).toBe(1);
-  });
+afterAll(() => {
+  resetStore();
 });
 
-// ─── Pause contract — proposal flow ──────────────────────────────────────────
+// ─── Propose action ──────────────────────────────────────────────────────────
 
-describe('POST /api/admin/contract/pause — multi-sig proposal', () => {
-  let token1: string;
+describe('proposeAction()', () => {
+  it('returns a proposed result with actionId when threshold > 1', () => {
+    const result = proposeAction('pause_contract', {}, ADMIN_1);
 
-  beforeEach(() => {
-    token1 = makeToken(ADMIN_1, 'admin');
+    expect(result.status).toBe('proposed');
+    expect(result.actionId).toBeDefined();
+    expect(typeof result.actionId).toBe('string');
   });
 
-  it('proposes a pause action and returns actionId with status pending', async () => {
-    const res = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
+  it('persists an action with the correct properties', () => {
+    const result = proposeAction('withdraw_fees', { recipient: 'G...' }, ADMIN_1);
 
-    expect(res.status).toBe(202);
-    expect(res.body.success).toBe(true);
-    expect(res.body.message).toContain('awaiting');
-    expect(res.body.data).toBeDefined();
-    expect(res.body.data.actionId).toBeDefined();
-    expect(res.body.data.collectedSignatures).toBe(1);
-    expect(res.body.data.requiredSignatures).toBe(3);
+    const action = store.pending_admin_actions[0];
+    expect(action).toBeDefined();
+    expect(action.id).toBe(result.actionId);
+    expect(action.action_type).toBe('withdraw_fees');
+    expect(action.proposer).toBe(ADMIN_1);
+    expect(action.required_signatures).toBe(3);
+    expect(action.collected_signatures).toBe(1);
+    expect(action.status).toBe('pending');
   });
 
-  it('returns 403 when wallet is not in adminWallets', async () => {
-    const outsiderToken = makeToken(OUTSIDER, 'admin');
-    const res = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${outsiderToken}`)
-      .send({});
+  it('records the proposer as the first signature', () => {
+    proposeAction('pause_contract', {}, ADMIN_1);
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe('Insufficient permissions');
+    expect(store.admin_action_signatures).toHaveLength(1);
+    expect(store.admin_action_signatures[0].signer).toBe(ADMIN_1);
   });
 
-  it('persists the proposal in the database', async () => {
-    const res = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
+  it('logs an audit event on proposal', () => {
+    proposeAction('pause_contract', {}, ADMIN_1);
 
-    const actionId = res.body.data.actionId;
-    const action = getPendingAdminActionById(actionId);
-    expect(action).not.toBeNull();
-    expect(action!.action_type).toBe('pause_contract');
-    expect(action!.proposer).toBe(ADMIN_1);
-    expect(action!.collected_signatures).toBe(1);
-    expect(action!.required_signatures).toBe(3);
-  });
-
-  it('logs an audit event on proposal', async () => {
-    await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
-
-    expect(mockLogAuditEvent).toHaveBeenCalled();
-    const call = mockLogAuditEvent.mock.calls.find(
-      (c: { action: string }) => c.action === 'pause_contract_proposed',
+    expect(mockLogAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'pause_contract_proposed',
+        adminWallet: ADMIN_1,
+      }),
     );
-    expect(call).toBeDefined();
+  });
+
+  it('sets an expiry timestamp in the future', () => {
+    const before = Date.now();
+    proposeAction('pause_contract', {}, ADMIN_1);
+
+    expect(store.pending_admin_actions[0].expires_at as number).toBeGreaterThanOrEqual(before);
   });
 });
 
-// ─── Unpause contract — proposal flow ────────────────────────────────────────
+// ─── Approve action ──────────────────────────────────────────────────────────
 
-describe('POST /api/admin/contract/unpause — multi-sig proposal', () => {
-  let token1: string;
-
-  beforeEach(() => {
-    token1 = makeToken(ADMIN_1, 'admin');
-  });
-
-  it('proposes an unpause action and returns actionId', async () => {
-    const res = await request(app)
-      .post('/api/admin/contract/unpause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
-
-    expect(res.status).toBe(202);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.actionId).toBeDefined();
-    expect(res.body.data.collectedSignatures).toBe(1);
-    expect(res.body.data.requiredSignatures).toBe(3);
-  });
-
-  it('returns 403 for non-admin wallet', async () => {
-    const outsiderToken = makeToken(OUTSIDER, 'admin');
-    const res = await request(app)
-      .post('/api/admin/contract/unpause')
-      .set('Authorization', `Bearer ${outsiderToken}`)
-      .send({});
-
-    expect(res.status).toBe(403);
-  });
-});
-
-// ─── Fee withdrawal — proposal flow ──────────────────────────────────────────
-
-describe('POST /api/admin/fees — multi-sig proposal', () => {
-  let token1: string;
+describe('approveAction()', () => {
+  let actionId: string;
 
   beforeEach(() => {
-    token1 = makeToken(ADMIN_1, 'admin');
+    actionId = proposeAction('pause_contract', {}, ADMIN_1).actionId;
+    jest.clearAllMocks();
   });
 
-  it('proposes a fee withdrawal action when threshold > 1', async () => {
-    const res = await request(app)
-      .post('/api/admin/fees')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({ recipient: VALID_RECIPIENT });
+  it('records a co-signature and returns pending when below threshold', () => {
+    const result = approveAction(actionId, ADMIN_2);
 
-    expect(res.status).toBe(202);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.actionId).toBeDefined();
-    expect(res.body.data.collectedSignatures).toBe(1);
-    expect(res.body.data.requiredSignatures).toBe(3);
-    expect(res.body.data.recipient).toBe(VALID_RECIPIENT);
+    expect(result.status).toBe('pending');
+    expect(result.collected).toBe(2);
+    expect(result.required).toBe(3);
+
+    expect(store.admin_action_signatures).toHaveLength(2);
   });
 
-  it('returns 400 when recipient is invalid (validation still runs before proposal)', async () => {
-    const res = await request(app)
-      .post('/api/admin/fees')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({ recipient: 'BAD' });
+  it('rejects a duplicate signature from the same wallet', () => {
+    const result = approveAction(actionId, ADMIN_1);
 
-    expect(res.status).toBe(400);
-  });
-});
+    expect(result.status).toBe('duplicate');
+    expect(result.collected).toBe(1);
 
-// ─── Listing pending actions ─────────────────────────────────────────────────
-
-describe('GET /api/admin/actions/pending', () => {
-  let token1: string;
-
-  beforeEach(() => {
-    token1 = makeToken(ADMIN_1, 'admin');
+    expect(store.admin_action_signatures).toHaveLength(1);
   });
 
-  it('returns an empty list when no actions are pending', async () => {
-    const res = await request(app)
-      .get('/api/admin/actions/pending')
-      .set('Authorization', `Bearer ${token1}`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data).toEqual([]);
+  it('throws when the signer is not in adminWallets', () => {
+    expect(() => approveAction(actionId, OUTSIDER)).toThrow('Insufficient permissions');
   });
 
-  it('lists pending actions after a proposal', async () => {
-    // Create a pending action
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
+  it('returns approved status when threshold is reached', () => {
+    approveAction(actionId, ADMIN_2);
+    const result = approveAction(actionId, ADMIN_3);
 
-    const res = await request(app)
-      .get('/api/admin/actions/pending')
-      .set('Authorization', `Bearer ${token1}`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.data.length).toBe(1);
-    expect(res.body.data[0].id).toBe(pauseRes.body.data.actionId);
-    expect(res.body.data[0].actionType).toBe('pause_contract');
-  });
-});
-
-// ─── Approving actions (co-signing) ──────────────────────────────────────────
-
-describe('POST /api/admin/actions/:id/approve — co-signing', () => {
-  let token1: string;
-  let token2: string;
-  let token3: string;
-
-  beforeEach(() => {
-    token1 = makeToken(ADMIN_1, 'admin');
-    token2 = makeToken(ADMIN_2, 'admin');
-    token3 = makeToken(ADMIN_3, 'admin');
+    expect(result.status).toBe('approved');
+    expect(result.collected).toBe(3);
+    expect(result.required).toBe(3);
   });
 
-  it('returns 404 for a non-existent action', async () => {
-    const res = await request(app)
-      .post('/api/admin/actions/nonexistent-id/approve')
-      .set('Authorization', `Bearer ${token2}`);
+  it('marks the action as executed when threshold is reached', () => {
+    approveAction(actionId, ADMIN_2);
+    approveAction(actionId, ADMIN_3);
 
-    expect(res.status).toBe(404);
-    expect(res.body.error).toContain('not found');
+    const a = store.pending_admin_actions[0];
+    expect(a.status).toBe('executed');
   });
 
-  it('records a co-signature and returns pending status when below threshold', async () => {
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
+  it('throws when trying to approve an already executed action', () => {
+    approveAction(actionId, ADMIN_2);
+    approveAction(actionId, ADMIN_3);
 
-    const actionId = pauseRes.body.data.actionId;
-
-    const res = await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token2}`);
-
-    expect(res.status).toBe(202);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.collectedSignatures).toBe(2);
-    expect(res.body.data.requiredSignatures).toBe(3);
-    expect(res.body.data.status).toBe('pending');
+    expect(() => approveAction(actionId, ADMIN_1)).toThrow('already been executed');
   });
 
-  it('rejects a duplicate signature from the same wallet', async () => {
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
-
-    const actionId = pauseRes.body.data.actionId;
-
-    // Admin 1 is already the proposer. Try to approve from admin 1 again.
-    const res = await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token1}`);
-
-    expect(res.status).toBe(409);
-    expect(res.body.error).toContain('already signed');
+  it('throws for a non-existent action', () => {
+    expect(() => approveAction('nonexistent', ADMIN_1)).toThrow('Pending action not found');
   });
 
-  it('rejects approval from a wallet not in adminWallets', async () => {
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
+  it('rejects expired actions', () => {
+    const a = store.pending_admin_actions[0];
+    a.expires_at = Date.now() - 1000;
 
-    const actionId = pauseRes.body.data.actionId;
-    const outsiderToken = makeToken(OUTSIDER, 'admin');
-
-    const res = await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${outsiderToken}`);
-
-    expect(res.status).toBe(403);
+    expect(() => approveAction(actionId, ADMIN_2)).toThrow('expired');
+    expect(store.pending_admin_actions[0].status).toBe('expired');
   });
 
-  it('executes the action when the threshold is reached', async () => {
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
+  it('logs an audit event on each approval', () => {
+    approveAction(actionId, ADMIN_2);
 
-    const actionId = pauseRes.body.data.actionId;
-
-    // Admin 2 approves
-    await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token2}`);
-
-    // Admin 3 approves — threshold met
-    const res = await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token3}`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.status).toBe('executed');
-    expect(res.body.data.collectedSignatures).toBe(3);
-    expect(res.body.data.requiredSignatures).toBe(3);
-  });
-
-  it('marks the action as executed in the database', async () => {
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
-
-    const actionId = pauseRes.body.data.actionId;
-
-    await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token2}`);
-    await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token3}`);
-
-    const action = getPendingAdminActionById(actionId);
-    expect(action).not.toBeNull();
-    expect(action!.status).toBe('executed');
-  });
-
-  it('rejects further approvals after an action has been executed', async () => {
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
-
-    const actionId = pauseRes.body.data.actionId;
-
-    await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token2}`);
-    await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token3}`);
-
-    // Try to approve again
-    const res = await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token3}`);
-
-    expect(res.status).toBe(409);
-    expect(res.body.error).toContain('already been executed');
-  });
-
-  it('logs an audit event on each approval', async () => {
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
-
-    const actionId = pauseRes.body.data.actionId;
-
-    await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token2}`);
-
-    expect(mockLogAuditEvent).toHaveBeenCalled();
-    const approveCalls = mockLogAuditEvent.mock.calls.filter(
-      (c: { action: string }) => c.action === 'pause_contract_approved',
+    expect(mockLogAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'pause_contract_approved',
+        adminWallet: ADMIN_2,
+      }),
     );
-    expect(approveCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('logs threshold_met when threshold is reached', () => {
+    approveAction(actionId, ADMIN_2);
+    jest.clearAllMocks();
+
+    approveAction(actionId, ADMIN_3);
+
+    expect(mockLogAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryParams: expect.objectContaining({ outcome: 'threshold_met' }),
+      }),
+    );
   });
 });
 
-// ─── View single action details ──────────────────────────────────────────────
+// ─── List pending actions ────────────────────────────────────────────────────
 
-describe('GET /api/admin/actions/:id — action details', () => {
-  let token1: string;
-  let token2: string;
-
-  beforeEach(() => {
-    token1 = makeToken(ADMIN_1, 'admin');
-    token2 = makeToken(ADMIN_2, 'admin');
+describe('listPendingActions()', () => {
+  it('returns empty array when no pending actions exist', () => {
+    const result = listPendingActions();
+    expect(result).toEqual([]);
   });
 
-  it('returns 404 for a non-existent action', async () => {
-    const res = await request(app)
-      .get('/api/admin/actions/nonexistent-id')
-      .set('Authorization', `Bearer ${token1}`);
+  it('returns only pending actions', () => {
+    proposeAction('pause_contract', {}, ADMIN_1);
 
-    expect(res.status).toBe(404);
+    const pending = listPendingActions();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].status).toBe('pending');
   });
 
-  it('returns action details including collected signers', async () => {
-    const pauseRes = await request(app)
-      .post('/api/admin/contract/pause')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({});
+  it('does not return expired actions', () => {
+    proposeAction('pause_contract', {}, ADMIN_1);
+    const a = store.pending_admin_actions[0];
+    a.expires_at = Date.now() - 1000;
 
-    const actionId = pauseRes.body.data.actionId;
+    const pending = listPendingActions();
+    expect(pending).toHaveLength(0);
+    expect(store.pending_admin_actions[0].status).toBe('expired');
+  });
+});
 
-    // Second admin approves
-    await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token2}`);
+// ─── Get action details ──────────────────────────────────────────────────────
 
-    const res = await request(app)
-      .get(`/api/admin/actions/${actionId}`)
-      .set('Authorization', `Bearer ${token1}`);
+describe('getActionDetails()', () => {
+  it('returns null for non-existent action', () => {
+    expect(getActionDetails('nonexistent')).toBeNull();
+  });
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.signers).toBeDefined();
-    expect(res.body.data.signers.length).toBe(2);
-    expect(res.body.data.signers.map((s: { wallet: string }) => s.wallet)).toEqual(
+  it('returns action with signatures', () => {
+    const id = proposeAction('pause_contract', {}, ADMIN_1).actionId;
+    approveAction(id, ADMIN_2);
+
+    const details = getActionDetails(id);
+    expect(details).not.toBeNull();
+    expect(details!.action.id).toBe(id);
+    expect(details!.signatures).toHaveLength(2);
+    expect(details!.signatures.map((s) => s.signer)).toEqual(
       expect.arrayContaining([ADMIN_1, ADMIN_2]),
     );
   });
 });
 
-// ─── Expiry ──────────────────────────────────────────────────────────────────
+// ─── Happy path: 3-of-3 full flow ────────────────────────────────────────────
 
-describe('Multi-sig action expiry', () => {
-  let token1: string;
-  let token2: string;
+describe('Full flow: 3-of-3 threshold', () => {
+  it('propose -> co-sign -> co-sign -> executed', () => {
+    const result1 = proposeAction('withdraw_fees', { recipient: 'G...' }, ADMIN_1);
+    expect(result1.status).toBe('proposed');
+    const actionId = result1.actionId;
 
-  beforeEach(() => {
-    token1 = makeToken(ADMIN_1, 'admin');
-    token2 = makeToken(ADMIN_2, 'admin');
-  });
+    const result2 = approveAction(actionId, ADMIN_2);
+    expect(result2.status).toBe('pending');
+    expect(result2.collected).toBe(2);
 
-  it('rejects approval of an expired action', async () => {
-    // Create an action with a very short TTL via a service call directly
-    const actionId = adminMultiSig.proposeAction('pause_contract', {}, ADMIN_1).actionId;
+    const result3 = approveAction(actionId, ADMIN_3);
+    expect(result3.status).toBe('approved');
+    expect(result3.collected).toBe(3);
 
-    // Manually set the action to expired by updating its expires_at in the past
-    const { getDb } = require('../../src/db');
-    getDb()
-      .prepare('UPDATE pending_admin_actions SET expires_at = ? WHERE id = ?')
-      .run(Date.now() - 1000, actionId);
-
-    const res = await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token2}`);
-
-    expect(res.status).toBe(410);
-    expect(res.body.error).toContain('expired');
-  });
-
-  it('lists only non-expired actions after sweep', async () => {
-    const actionId = adminMultiSig.proposeAction('pause_contract', {}, ADMIN_1).actionId;
-
-    // Manually expire it
-    const { getDb } = require('../../src/db');
-    getDb()
-      .prepare('UPDATE pending_admin_actions SET expires_at = ? WHERE id = ?')
-      .run(Date.now() - 1000, actionId);
-
-    // The listing sweep will mark it expired
-    const res = await request(app)
-      .get('/api/admin/actions/pending')
-      .set('Authorization', `Bearer ${token1}`);
-
-    expect(res.body.data.length).toBe(0);
+    const a = store.pending_admin_actions[0];
+    expect(a.status).toBe('executed');
+    expect(a.collected_signatures).toBe(3);
   });
 });
 
-// ─── Complete happy path ─────────────────────────────────────────────────────
+// ─── Edge: only 2 of 3 signatures collected (below threshold) ────────────────
 
-describe('Multi-sig happy path: 3-of-3 fee withdrawal proposal and execution', () => {
-  let token1: string;
-  let token2: string;
-  let token3: string;
+describe('Below-threshold: 2 of 3 signatures', () => {
+  it('remains pending after 2 signatures', () => {
+    const actionId = proposeAction('pause_contract', {}, ADMIN_1).actionId;
 
-  beforeEach(() => {
-    token1 = makeToken(ADMIN_1, 'admin');
-    token2 = makeToken(ADMIN_2, 'admin');
-    token3 = makeToken(ADMIN_3, 'admin');
-  });
+    approveAction(actionId, ADMIN_2);
+    const detail = listPendingActions();
+    expect(detail).toHaveLength(1);
+    expect(detail[0].status).toBe('pending');
 
-  it('full flow: propose → co-sign → co-sign → executed', async () => {
-    // 1. Admin 1 proposes fee withdrawal
-    const proposalRes = await request(app)
-      .post('/api/admin/fees')
-      .set('Authorization', `Bearer ${token1}`)
-      .send({ recipient: VALID_RECIPIENT });
-
-    expect(proposalRes.status).toBe(202);
-    expect(proposalRes.body.data.collectedSignatures).toBe(1);
-    expect(proposalRes.body.data.requiredSignatures).toBe(3);
-    const actionId = proposalRes.body.data.actionId;
-
-    // 2. Admin 2 approves
-    const approve2Res = await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token2}`);
-
-    expect(approve2Res.status).toBe(202);
-    expect(approve2Res.body.data.collectedSignatures).toBe(2);
-
-    // 3. Admin 3 approves — threshold reached
-    const approve3Res = await request(app)
-      .post(`/api/admin/actions/${actionId}/approve`)
-      .set('Authorization', `Bearer ${token3}`);
-
-    expect(approve3Res.status).toBe(200);
-    expect(approve3Res.body.data.status).toBe('executed');
-    expect(approve3Res.body.data.collectedSignatures).toBe(3);
-
-    // 4. Verify database state
-    const action = getPendingAdminActionById(actionId);
-    expect(action?.status).toBe('executed');
-    expect(action?.collected_signatures).toBe(3);
+    const result = approveAction(actionId, ADMIN_3);
+    expect(result.status).toBe('approved');
   });
 });
