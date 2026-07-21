@@ -64,10 +64,10 @@ function makeToken(wallet: string, role: string) {
   return jwt.sign({ sub: wallet, role }, SECRET, { expiresIn: '1h' });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   mockGetPlayerById.mockReset();
   // Clear any cached state from previous tests.
-  invalidatePlayerCache(PLAYER_ROW.player_id);
+  await invalidatePlayerCache(PLAYER_ROW.player_id);
 });
 
 describe('#307 GET /api/players/:playerId — cache hit', () => {

@@ -132,6 +132,11 @@ const config = {
   /** TTL for player list cache entries in milliseconds. */
   playerCacheTtlMs: parseInt(process.env.PLAYER_CACHE_TTL_MS ?? '60000', 10),
 
+  // When set, the search cache (src/services/cache.ts) uses Redis so cache
+  // state is shared across multiple backend instances. When unset (default),
+  // it falls back to an in-memory Map — no setup required for local dev/CI.
+  redisUrl: process.env.REDIS_URL || '',
+
   /** TTL for pinJson deduplication cache entries in milliseconds (default: 5 min). */
   pinJsonCacheTtlMs: parseInt(process.env.PIN_JSON_CACHE_TTL_MS ?? '300000', 10),
 
