@@ -229,6 +229,38 @@ mod tests {
     }
 
     #[test]
+    fn invariant_subscription_expiry_is_checked_after_each_sequence_step() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+
+        let scout = Address::generate(&env);
+        let mut expected_expiry: Option<u32> = None;
+        let mut state = 0xfeed_1234u64;
+
+        for step in 0..24 {
+            if state % 2 == 0 {
+                let duration = ((state >> 5) % 6 + 1) as u32;
+                client.subscribe(&scout, &1u32, &duration);
+                expected_expiry = Some(env.ledger().sequence() + duration);
+            } else {
+                let advance_by = ((state >> 2) % 4 + 1) as u32;
+                env.ledger().with_mut(|li| {
+                    li.sequence_number += advance_by;
+                });
+            }
+
+            let active = client.is_subscribed(&scout);
+            let expected_active = expected_expiry.map_or(false, |expiry| env.ledger().sequence() < expiry);
+            assert_eq!(active, expected_active, "step {step}");
+
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+        }
+    }
+
+    #[test]
     fn double_initialize_fails() {
         let env = Env::default();
         let (client, admin, token) = setup(&env);
