@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import crypto from 'crypto';
 import config from '../config';
 import { EventRecord, ContractEventType } from '../types';
 import { runMigrations } from './migrate';
@@ -80,8 +81,13 @@ export function initDb(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_contact_unlocks_scout ON contact_unlocks (scout_wallet);
   `);
-  // Run SQL migrations (player_profile_history, idempotency_keys, etc.)
+  // Run SQL migrations (player_profile_history, idempotency_keys, webhook_subscriptions, etc.)
   runMigrations(_db);
+
+  // Seed a subscription row for the legacy WEBHOOK_URL/WEBHOOK_ENABLED config on
+  // first startup, so single-subscriber deployments keep working with the new
+  // DB-backed subscription model without any manual migration step.
+  ensureLegacyWebhookSubscription();
 }
 
 export function getDb(): Database.Database {
@@ -1082,4 +1088,150 @@ export function getAdminActionSignature(action_id: string, signer: string): { si
 export function getAdminActionSignatures(action_id: string): { signer: string; signed_at: number }[] {
   const sql = `SELECT signer, signed_at FROM admin_action_signatures WHERE action_id = ? ORDER BY signed_at ASC`;
   return timedQuery(sql, () => getDb().prepare(sql).all(action_id) as { signer: string; signed_at: number }[]);
+}
+
+// ─── Webhook subscriptions (#470) ────────────────────────────────────────────
+//
+// Schema defined in db/012_webhook_subscriptions.sql. Each row is a subscriber
+// that receives outbound event webhooks; `secret` is the per-subscriber HMAC
+// key used to sign every delivery (see src/services/webhooks.ts, docs/webhooks.md).
+
+export interface WebhookSubscription {
+  id: number;
+  url: string;
+  secret: string;
+  created_at: string;
+}
+
+export function createWebhookSubscription(url: string, secret?: string): WebhookSubscription {
+  const finalSecret = secret ?? crypto.randomBytes(32).toString('hex');
+  const sql = 'INSERT INTO webhook_subscriptions (url, secret) VALUES (?, ?)';
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(url, finalSecret);
+    return {
+      id: Number(info.lastInsertRowid),
+      url,
+      secret: finalSecret,
+      created_at: new Date().toISOString(),
+    };
+  });
+}
+
+export function listWebhookSubscriptions(): WebhookSubscription[] {
+  const sql = 'SELECT * FROM webhook_subscriptions ORDER BY id ASC';
+  return timedQuery(sql, () => getDb().prepare(sql).all() as WebhookSubscription[]);
+}
+
+/**
+ * Idempotently seeds a subscription for the legacy WEBHOOK_URL config so
+ * single-subscriber deployments keep working after moving to the DB-backed
+ * subscription model. No-op if the URL is already subscribed, or if the
+ * legacy webhook is not enabled/configured. Called once from initDb().
+ */
+export function ensureLegacyWebhookSubscription(): void {
+  if (!config.webhook.enabled || !config.webhook.url) return;
+
+  const sql = 'SELECT * FROM webhook_subscriptions WHERE url = ?';
+  const existing = timedQuery(sql, () =>
+    getDb().prepare(sql).get(config.webhook.url) as WebhookSubscription | undefined
+  );
+  if (existing) return;
+
+  createWebhookSubscription(config.webhook.url, config.webhook.secret || undefined);
+}
+
+// ─── Webhook dead-letter queue (#470) ────────────────────────────────────────
+//
+// Schema defined in db/013_webhook_dead_letters.sql. A row is inserted whenever
+// postWebhookWithRetry() exhausts all retry attempts for a given subscriber,
+// instead of the delivery being logged and dropped.
+
+export type WebhookDeadLetterStatus = 'pending' | 'replayed';
+
+export interface WebhookDeadLetter {
+  id: number;
+  subscription_id: number | null;
+  url: string;
+  event_type: string;
+  payload: string;
+  failure_reason: string;
+  attempts: number;
+  status: WebhookDeadLetterStatus;
+  created_at: string;
+  replayed_at: string | null;
+}
+
+export interface InsertDeadLetterInput {
+  subscriptionId: number | null;
+  url: string;
+  eventType: string;
+  payload: string;
+  failureReason: string;
+  attempts: number;
+}
+
+export function insertWebhookDeadLetter(input: InsertDeadLetterInput): WebhookDeadLetter {
+  const sql = `INSERT INTO webhook_dead_letters
+    (subscription_id, url, event_type, payload, failure_reason, attempts, status)
+   VALUES (?, ?, ?, ?, ?, ?, 'pending')`;
+  return timedQuery(sql, () => {
+    const info = getDb()
+      .prepare(sql)
+      .run(
+        input.subscriptionId,
+        input.url,
+        input.eventType,
+        input.payload,
+        input.failureReason,
+        input.attempts
+      );
+    return {
+      id: Number(info.lastInsertRowid),
+      subscription_id: input.subscriptionId,
+      url: input.url,
+      event_type: input.eventType,
+      payload: input.payload,
+      failure_reason: input.failureReason,
+      attempts: input.attempts,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      replayed_at: null,
+    };
+  });
+}
+
+export function listWebhookDeadLetters(limit: number, offset: number): WebhookDeadLetter[] {
+  const sql = 'SELECT * FROM webhook_dead_letters ORDER BY id DESC LIMIT ? OFFSET ?';
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(limit, offset) as WebhookDeadLetter[]
+  );
+}
+
+export function countWebhookDeadLetters(): number {
+  const sql = 'SELECT COUNT(*) as count FROM webhook_dead_letters';
+  return timedQuery(sql, () => {
+    const row = getDb().prepare(sql).get() as { count: number } | undefined;
+    return row?.count ?? 0;
+  });
+}
+
+export function getWebhookDeadLetterById(id: number): WebhookDeadLetter | undefined {
+  const sql = 'SELECT * FROM webhook_dead_letters WHERE id = ?';
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).get(id) as WebhookDeadLetter | undefined
+  );
+}
+
+export function markWebhookDeadLetterReplayed(id: number): void {
+  const sql = "UPDATE webhook_dead_letters SET status = 'replayed', replayed_at = ? WHERE id = ?";
+  timedQuery(sql, () => getDb().prepare(sql).run(new Date().toISOString(), id));
+}
+
+export function updateWebhookDeadLetterAttempt(
+  id: number,
+  attempts: number,
+  failureReason: string
+): void {
+  const sql = 'UPDATE webhook_dead_letters SET attempts = ?, failure_reason = ? WHERE id = ?';
+  timedQuery(sql, () => getDb().prepare(sql).run(attempts, failureReason, id));
 }
