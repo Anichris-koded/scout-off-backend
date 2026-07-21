@@ -396,6 +396,13 @@ export async function unlockContact(req: Request, res: Response, next: NextFunct
       return;
     }
 
+    // Idempotent: a player already unlocked by this scout must not be charged again.
+    if (hasContactUnlock(wallet, playerId)) {
+      logger.info(`[scout] action=unlock_contact_already_unlocked scout=${wallet} playerId=${playerId}`);
+      res.json({ success: true, data: { alreadyUnlocked: true } });
+      return;
+    }
+
     logger.info(`[scout] action=unlock_contact_attempt scout=${wallet} playerId=${playerId}`);
 
     const result = await submitContactPayment(wallet, playerId);
