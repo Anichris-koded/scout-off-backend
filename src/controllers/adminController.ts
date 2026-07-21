@@ -3,7 +3,7 @@ import { z } from 'zod';
 import jwt from 'jsonwebtoken';
 import { getEvents, getEventsCount, getLastLedger, setLastLedger, getValidatorStats, getAuditLogs, getAuditLogsCount } from '../db';
 import { getAllValidators, insertValidator, revokeValidatorRow } from '../services/indexer';
-import { ApiResponse, EventRecord, ContractEventType } from '../types';
+import type { ApiResponse, EventRecord, ContractEventType } from '../types';
 import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, unpauseContractOnChain } from '../services/stellar';
 import { revokeToken } from '../services/tokenBlocklist';
