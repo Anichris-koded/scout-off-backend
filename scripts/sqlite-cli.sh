@@ -12,7 +12,7 @@ DB_PATH="$1"
 SQL="$2"
 
 if command -v sqlite3 &>/dev/null; then
-  exec sqlite3 "${DB_PATH}" "${SQL}"
+  exec sqlite3 "${DB_PATH}" <<< "${SQL}"
 fi
 
 if ! command -v python3 &>/dev/null; then

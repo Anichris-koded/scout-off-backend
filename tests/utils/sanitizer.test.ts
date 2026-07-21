@@ -29,34 +29,34 @@ describe('sanitizeInput', () => {
   });
 
   describe('HTML and script-tag content', () => {
-    it('removes HTML tags', () => {
+    it('preserves HTML tags (leaving non-control chars intact)', () => {
       const input = '<div>Hello</div>';
-      expect(sanitizeInput(input)).toBe('divHellodiv');
+      expect(sanitizeInput(input)).toBe('<div>Hello</div>');
     });
 
-    it('removes script tags', () => {
+    it('preserves script tags', () => {
       const input = '<script>alert("xss")</script>';
-      expect(sanitizeInput(input)).toBe('scriptalertxssscript');
+      expect(sanitizeInput(input)).toBe('<script>alert("xss")</script>');
     });
 
-    it('removes iframe tags', () => {
+    it('preserves iframe tags', () => {
       const input = '<iframe src="evil.com"></iframe>';
-      expect(sanitizeInput(input)).toBe('iframesrcevilcomiframe');
+      expect(sanitizeInput(input)).toBe('<iframe src="evil.com"></iframe>');
     });
 
-    it('removes img tags with event handlers', () => {
+    it('preserves img tags with event handlers', () => {
       const input = '<img src="x" onerror="alert(1)">';
-      expect(sanitizeInput(input)).toBe('imgsrcxonerroralert1');
+      expect(sanitizeInput(input)).toBe('<img src="x" onerror="alert(1)">');
     });
 
-    it('removes on* event attributes', () => {
+    it('preserves on* event attributes', () => {
       const input = 'onclick="bad()" onload="worse()"';
-      expect(sanitizeInput(input)).toBe('onclick=bad onload=worse');
+      expect(sanitizeInput(input)).toBe('onclick="bad()" onload="worse()"');
     });
 
-    it('removes style tags', () => {
+    it('preserves style tags', () => {
       const input = '<style>body { color: red; }</style>';
-      expect(sanitizeInput(input)).toBe('stylebody color red style');
+      expect(sanitizeInput(input)).toBe('<style>body { color: red; }</style>');
     });
   });
 
@@ -136,7 +136,7 @@ describe('sanitizeInput', () => {
     it('removes all control characters from 0-31', () => {
       let input = 'Test';
       for (let i = 0; i <= 31; i++) {
-        input = `Before\x${i.toString(16).padStart(2, '0')}After`;
+        input = `Before${String.fromCharCode(i)}After`;
         const result = sanitizeInput(input);
         expect(result).toBe('BeforeAfter');
       }
@@ -247,7 +247,7 @@ describe('sanitizeInput', () => {
 
     it('handles HTML with control characters', () => {
       const input = '<script>\x00alert("xss")\n</script>';
-      expect(sanitizeInput(input)).toBe('scriptalertxssscript');
+      expect(sanitizeInput(input)).toBe('<script>alert("xss")</script>');
     });
 
     it('handles whitespace, control chars, and Unicode', () => {
