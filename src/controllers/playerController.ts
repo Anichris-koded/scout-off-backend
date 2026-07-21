@@ -84,7 +84,7 @@ export async function registerPlayer(
           });
 
     // Invalidate player search cache so new profile appears in results
-    invalidatePlayerCache();
+    await invalidatePlayerCache();
 
     // Write to DB immediately so GET /players/:playerId returns 200 without
     // waiting for the indexer to process the blockchain event (#282).
@@ -137,7 +137,7 @@ export async function getPlayer(
     }
     const playerId = sanitizeInput(req.params.playerId);
     const cacheKey = `players:${playerId}`;
-    let data = cacheGet<Record<string, unknown>>(cacheKey);
+    let data = await cacheGet<Record<string, unknown>>(cacheKey);
     if (!data) {
       const row = getPlayerById(playerId);
       if (!row) {
@@ -157,7 +157,7 @@ export async function getPlayer(
         tierName,
         tierDescription,
       };
-      cacheSet(cacheKey, data);
+      await cacheSet(cacheKey, data);
     }
 
     if (data.is_active === 0) {
@@ -217,7 +217,7 @@ export async function filterPlayers(
       pageSize,
     })}`;
 
-    const cached = cacheGet<FilterPlayersResult>(cacheKey);
+    const cached = await cacheGet<FilterPlayersResult>(cacheKey);
     if (cached) {
       res.json({ success: true, ...cached });
       return;
@@ -249,7 +249,7 @@ export async function filterPlayers(
     }));
 
     const result: FilterPlayersResult = { data: enriched, total, page, pageSize, pages };
-    cacheSet(cacheKey, result);
+    await cacheSet(cacheKey, result);
 
     const scoutWallet = req.account ?? 'anonymous';
     recordAudit(scoutWallet, 'player_search', {
@@ -296,7 +296,7 @@ export async function updatePlayer(
     });
 
     // Bust the single-player cache so the next GET reflects the update.
-    invalidatePlayerCache(playerId);
+    await invalidatePlayerCache(playerId);
 
     res.status(200).json({
       success: true,
@@ -391,7 +391,7 @@ export async function deactivatePlayerEndpoint(
       return;
     }
     deactivatePlayer(playerId);
-    invalidatePlayerCache(playerId);
+    await invalidatePlayerCache(playerId);
     res.json({ success: true, message: "Player profile deactivated successfully" });
   } catch (err) {
     next(err);
@@ -417,7 +417,7 @@ export async function reactivatePlayerEndpoint(
       return;
     }
     reactivatePlayer(playerId);
-    invalidatePlayerCache(playerId);
+    await invalidatePlayerCache(playerId);
     res.json({ success: true, message: "Player profile reactivated successfully" });
   } catch (err) {
     next(err);
