@@ -4,6 +4,7 @@
  *   - queryMilestones()           — view-only simulation call
  *   - cancelSubscriptionOnChain() — real Soroban invocation
  *   - pauseContractOnChain()      — real Soroban invocation
+ *   - withdrawFees()              — real Soroban invocation
  *
  * The Stellar SDK and signer utility are fully mocked so no live RPC is needed.
  */
@@ -82,6 +83,7 @@ import {
   pauseContractOnChain,
   registerValidatorOnChain,
   PaymentError,
+  FeeWithdrawalError,
   ValidatorActionError,
 } from '../../src/services/stellar';
 
