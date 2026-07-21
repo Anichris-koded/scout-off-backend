@@ -3,6 +3,7 @@
  *   - isSubscribed()              — view-only simulation call
  *   - queryMilestones()           — stub returning []
  *   - cancelSubscriptionOnChain() — real Soroban invocation
+ *   - pauseContractOnChain()      — real Soroban invocation
  *
  * The Stellar SDK and signer utility are fully mocked so no live RPC is needed.
  */
@@ -78,6 +79,7 @@ import {
   queryMilestones,
   cancelSubscriptionOnChain,
   logTrialOffer,
+  pauseContractOnChain,
   PaymentError,
 } from '../../src/services/stellar';
 
@@ -299,6 +301,104 @@ describe('cancelSubscriptionOnChain', () => {
     mockGetAccount.mockRejectedValue(new Error('network unreachable'));
 
     await expect(cancelSubscriptionOnChain(WALLET)).rejects.toThrow('network unreachable');
+  });
+});
+
+// ─── pauseContractOnChain ─────────────────────────────────────────────────────
+
+describe('pauseContractOnChain', () => {
+  it('submits a real Soroban transaction and returns its hash on success', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'real-pause-tx-hash-001' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS' });
+
+    const result = await pauseContractOnChain();
+
+    expect(result.transactionId).toBe('real-pause-tx-hash-001');
+    expect(mockGetAccount).toHaveBeenCalled();
+    expect(mockSimulate).toHaveBeenCalled();
+    expect(mockAssemble).toHaveBeenCalled();
+    expect(mockSendTransaction).toHaveBeenCalled();
+    expect(mockGetTransaction).toHaveBeenCalledWith('real-pause-tx-hash-001');
+  });
+
+  it('polls getTransaction until status is no longer NOT_FOUND', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'pause-poll-hash' });
+    mockGetTransaction
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'SUCCESS' });
+
+    jest.useFakeTimers();
+    const promise = pauseContractOnChain();
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
+    expect(result.transactionId).toBe('pause-poll-hash');
+    expect(mockGetTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws ContractActionError CONTRACT_ALREADY_PAUSED when simulation reports the contract is already paused', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'ContractPaused' });
+
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
+      code: 'CONTRACT_ALREADY_PAUSED',
+    });
+    // Never submitted — the function throws before sendTransaction
+    expect(mockSendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws ContractActionError CONTRACT_ALREADY_PAUSED when simulation error contains contract code #10', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Contract error: #10' });
+
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
+      code: 'CONTRACT_ALREADY_PAUSED',
+    });
+  });
+
+  it('throws ContractActionError NETWORK_ERROR for an unrelated simulation error', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Something went wrong' });
+
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws ContractActionError NETWORK_ERROR when sendTransaction returns ERROR status', async () => {
+    mockSendTransaction.mockResolvedValue({
+      status: 'ERROR',
+      errorResult: 'tx_failed',
+      hash: 'pause-err-hash',
+    });
+
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
+      code: 'NETWORK_ERROR',
+    });
+    // Transaction never confirmed — getTransaction should NOT be called
+    expect(mockGetTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws ContractActionError NETWORK_ERROR when the confirmed transaction has FAILED status', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'pause-fail-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'FAILED' });
+
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('propagates errors from getAccount (RPC unreachable)', async () => {
+    mockGetAccount.mockRejectedValue(new Error('network unreachable'));
+
+    await expect(pauseContractOnChain()).rejects.toThrow('network unreachable');
   });
 });
 

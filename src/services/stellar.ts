@@ -710,6 +710,79 @@ export async function unpauseContractOnChain(): Promise<ContractActionResult> {
   });
 }
 
+/**
+ * Invoke the contract's `pause()` function via the platform keypair.
+ * Returns the transaction hash on success.
+ * Throws ContractActionError with code 'CONTRACT_ALREADY_PAUSED' if the simulation
+ * indicates the contract is already paused (Soroban error code 10).
+ *
+ * Note: the shared contract error enum (contracts/shared/src/errors.rs) only
+ * defines a single generic `ContractPaused` (#10) variant for paused-state
+ * preconditions — there is no distinct "already paused" vs "not paused"
+ * error code. pause()/unpause() reuse that same variant for whichever
+ * precondition fails, so the client interprets the code based on which
+ * action was invoked (mirrors unpauseContractOnChain's string matching).
+ */
+export async function pauseContractOnChain(): Promise<ContractActionResult> {
+  return tracer.startActiveSpan('stellar.pauseContractOnChain', async (span) => {
+    span.setAttribute('stellar.contract_function', 'pause');
+    try {
+      const { getPlatformKeypair } = await import('../utils/signer');
+      const keypair = getPlatformKeypair();
+
+      const account = await server.getAccount(keypair.publicKey());
+      const contract = new Contract(config.contractId);
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: networkPassphrase(),
+      })
+        .addOperation(contract.call('pause'))
+        .setTimeout(30)
+        .build();
+
+      const simResult = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        const errMsg = simResult.error ?? '';
+        if (errMsg.includes('ContractPaused') || errMsg.includes('contract_paused') || errMsg.includes('#10')) {
+          throw new ContractActionError('Contract is already paused', 'CONTRACT_ALREADY_PAUSED');
+        }
+        throw new ContractActionError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+      }
+
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      preparedTx.sign(keypair);
+
+      const sendResult = await server.sendTransaction(preparedTx);
+      if (sendResult.status === 'ERROR') {
+        throw new ContractActionError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+      }
+
+      const hash = sendResult.hash;
+      span.setAttribute('stellar.tx_hash', hash);
+
+      let getResult = await server.getTransaction(hash);
+      while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+        await new Promise((r) => setTimeout(r, 1000));
+        getResult = await server.getTransaction(hash);
+      }
+
+      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw new ContractActionError('Transaction failed on-chain', 'NETWORK_ERROR');
+      }
+
+      return { transactionId: hash };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+}
+
 export interface UpdateProfileResult {
   transactionId: string;
   metadataUri: string;

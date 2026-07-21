@@ -94,6 +94,7 @@ jest.mock('../../src/services/stellar', () => ({
     token: 'XLM',
   }),
   stellarHealth: jest.fn().mockResolvedValue(true),
+  pauseContractOnChain: jest.fn().mockResolvedValue({ transactionId: 'real-pause-txid-abc123' }),
   unpauseContractOnChain: jest.fn().mockResolvedValue({ transactionId: 'real-unpause-txid-abc123' }),
   ContractActionError: class ContractActionError extends Error {
     constructor(message: string, public readonly code: string) {
@@ -511,7 +512,7 @@ describe('POST /api/admin/validators/revoke — envelope shape', () => {
 });
 
 describe('POST /api/admin/contract/pause — envelope shape', () => {
-  it('success: { success: true, message: string, transactionId: string }', async () => {
+  it('success: { success: true, message: string, transactionId: string } — invokes the real on-chain call', async () => {
     const res = await request(app)
       .post('/api/admin/contract/pause')
       .set('Authorization', `Bearer ${adminToken}`);
@@ -519,6 +520,27 @@ describe('POST /api/admin/contract/pause — envelope shape', () => {
     expect(res.body.success).toBe(true);
     expect(typeof res.body.message).toBe('string');
     expect(typeof res.body.transactionId).toBe('string');
+    // Must be the real mocked RPC transaction id, not the old simulated placeholder.
+    expect(res.body.transactionId).toBe('real-pause-txid-abc123');
+    expect(res.body.transactionId).not.toBe('stub-pause-txn-placeholder');
+  });
+
+  it('returns 409 when contract is already paused', async () => {
+    const { pauseContractOnChain, ContractActionError } = jest.requireMock('../../src/services/stellar') as {
+      pauseContractOnChain: jest.Mock;
+      ContractActionError: new (msg: string, code: string) => Error & { code: string };
+    };
+    pauseContractOnChain.mockRejectedValueOnce(
+      new ContractActionError('Contract is already paused', 'CONTRACT_ALREADY_PAUSED'),
+    );
+    const res = await request(app)
+      .post('/api/admin/contract/pause')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(409);
+    expect(res.body.success).toBe(false);
+    expect(typeof res.body.error).toBe('string');
+    // restore
+    pauseContractOnChain.mockResolvedValue({ transactionId: 'real-pause-txid-abc123' });
   });
 });
 
