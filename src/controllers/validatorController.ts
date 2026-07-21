@@ -5,16 +5,9 @@ import { pinJson } from '../services/ipfs';
 import { getPendingMilestones as getPendingMilestonesFromDb } from '../db';
 import { invalidateMilestoneCache } from '../services/cache';
 import { recordAudit } from '../utils/audit';
+import { isValidEvidenceUri } from '../utils/uriValidator';
 
-/**
- * Validates that an evidence URI is secure and properly formatted.
- * Accepts: ipfs://, https://
- * Rejects: http://, plain strings, empty strings
- */
-export function isValidEvidenceUri(uri: string): boolean {
-  if (!uri || typeof uri !== 'string') return false;
-  return uri.startsWith('ipfs://') || uri.startsWith('https://');
-}
+export { isValidEvidenceUri };
 
 export const milestoneSchema = z.object({
   playerId: z.string().min(1),
@@ -40,7 +33,7 @@ export async function submitMilestoneEvidence(req: Request, res: Response, next:
     const { playerId, milestoneType, evidenceUri } = milestoneSchema.parse(req.body);
     const evidenceCid = await pinJson({ playerId, milestoneType, evidenceUri });
     // Invalidate milestone + player cache so updated progress tier is reflected
-    invalidateMilestoneCache(playerId);
+    await invalidateMilestoneCache(playerId);
 
     const validatorWallet = req.account ?? 'unknown';
     const correlationId = getCorrelationId(req);

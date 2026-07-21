@@ -72,7 +72,7 @@ describe('GET /api/players/:playerId — ETag / 304 support', () => {
     const updatedPlayer = { ...PLAYER, metadata_uri: 'QmUpdatedCID456' };
     mockGetPlayerById.mockReturnValue(updatedPlayer);
     // Simulate the cache invalidation a real PUT would trigger (#307)
-    invalidatePlayerCache(PLAYER.player_id);
+    await invalidatePlayerCache(PLAYER.player_id);
 
     const second = await request(app)
       .get(`/api/players/${PLAYER.player_id}`)

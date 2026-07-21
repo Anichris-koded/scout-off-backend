@@ -78,7 +78,11 @@ services:
       MILESTONE_RATE_MAX: "10"
 
       # ── Redis (optional) ──────────────────────────────────────────
-      REDIS_URL: ""
+      # Points the search cache (src/services/cache.ts) at the redis service
+      # below instead of the process-local in-memory fallback. Unset this
+      # (or remove the redis service and depends_on) to run against the
+      # in-memory cache — nothing else needs to change.
+      REDIS_URL: "redis://redis:6379"
 
       # ── Proxy ─────────────────────────────────────────────────────
       TRUSTED_PROXY_COUNT: "0"
@@ -89,6 +93,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Optional: only needed so `backend` can use the Redis-backed cache store
+  # locally. The backend falls back to an in-memory cache automatically if
+  # REDIS_URL is unset, so this service can be removed (along with the
+  # depends_on above) without breaking anything.
+  redis:
+    image: redis:7-alpine
+    container_name: scout-off-redis
+    restart: unless-stopped
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 volumes:
   # Named volume — survives `docker compose down` (data is only lost on `down -v`)

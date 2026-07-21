@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import express from 'express';
-import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, importValidators } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, getAuditChainVerification, importValidators, getPendingActions, getPendingActionById, approvePendingAction } from '../controllers/adminController';
+import { getFeatureFlags, updateFeatureFlag } from '../controllers/featureFlagsController';
 import { exportEvents } from '../controllers/exportController';
+import { listDeadLetters, replayDeadLetter } from '../controllers/webhookAdminController';
 import { requireRole } from '../middleware/auth';
 import { ipAllowlistMiddleware } from '../middleware/ipAllowlist';
+import { methodNotAllowed } from '../middleware/methodNotAllowed';
 
 const router = Router();
 
@@ -18,7 +21,9 @@ router.use(ipAllowlistMiddleware);
  * @response 200 { success: true, data: { players, milestones, subscriptions, events } }
  * @auth Bearer (admin role required)
  */
-router.get('/stats', requireRole('admin'), getStats);
+router.route('/stats')
+  .get(requireRole('admin'), getStats)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/admin/events
@@ -30,20 +35,29 @@ router.get('/stats', requireRole('admin'), getStats);
  * @response 400 { success: false, error: string } - Invalid date range
  * @auth Bearer (any authenticated user)
  */
-router.get('/events', requireRole('admin'), getAllEvents);
+router.route('/events')
+  .get(requireRole('admin'), getAllEvents)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/admin/events/export
  *
- * Exports all indexed Soroban contract events as CSV format.
+ * Streams indexed Soroban contract events as CSV. Rows are fetched from the
+ * database in bounded pages and written to the response as they arrive, so
+ * memory usage stays constant regardless of table size.
  * Useful for data analysis, reporting, and external system integration.
  *
+ * Query params (same semantics as GET /api/admin/events): startDate, endDate (ISO 8601), eventType
+ *
  * @response 200 CSV file with columns: event_type, ledger, timestamp, payload
+ * @response 400 { success: false, error: string } - Invalid date range
  * @response 401 { success: false, error: string } - Missing token
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.get('/events/export', requireRole('admin'), exportEvents);
+router.route('/events/export')
+  .get(requireRole('admin'), exportEvents)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/admin/fees
@@ -53,21 +67,7 @@ router.get('/events/export', requireRole('admin'), exportEvents);
  *
  * @response 200 { success: true, data: FeeHistoryItem[] }
  * @auth Bearer (admin role required)
- */
-router.get('/fees', requireRole('admin'), getFeeSummary);
-
-/**
- * GET /api/admin/audit
  *
- * Returns paginated audit log entries. Supports `startDate`, `endDate` (ISO 8601),
- * `action` filters, and `limit`/`offset` pagination.
- *
- * @response 200 { success: true, data: AuditLogRow[], total, limit, offset }
- * @auth Bearer (admin role required)
- */
-router.get('/audit', requireRole('admin'), getAuditLog);
-
-/**
  * POST /api/admin/fees
  *
  * Withdraws accumulated platform fees from the Soroban contract to a specified recipient.
@@ -80,7 +80,35 @@ router.get('/audit', requireRole('admin'), getAuditLog);
  * @response 409 { success: false, error: string } - No fees available
  * @auth Bearer (admin role required)
  */
-router.post('/fees', requireRole('admin'), withdrawFeesController);
+router.route('/fees')
+  .get(requireRole('admin'), getFeeSummary)
+  .post(requireRole('admin'), withdrawFeesController)
+  .all(methodNotAllowed(['GET', 'POST', 'HEAD']));
+
+/**
+ * GET /api/admin/audit
+ *
+ * Returns paginated audit log entries. Supports `startDate`, `endDate` (ISO 8601),
+ * `action` filters, and `limit`/`offset` pagination.
+ *
+ * @response 200 { success: true, data: AuditLogRow[], total, limit, offset }
+ * @auth Bearer (admin role required)
+ */
+router.route('/audit')
+  .get(requireRole('admin'), getAuditLog)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+/**
+ * GET /api/admin/audit/verify
+ *
+ * Walks the audit_log hash chain and reports whether it is intact (#464).
+ *
+ * @response 200 { success: true, data: { valid, brokenAtId, reason?, rowsChecked } }
+ * @auth Bearer (admin role required)
+ */
+router.route('/audit/verify')
+  .get(requireRole('admin'), getAuditChainVerification)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/admin/validators
@@ -91,7 +119,9 @@ router.post('/fees', requireRole('admin'), withdrawFeesController);
  * @response 200 { success: true, data: ValidatorRow[] }
  * @auth Bearer (admin role required)
  */
-router.get('/validators', requireRole('admin'), listValidators);
+router.route('/validators')
+  .get(requireRole('admin'), listValidators)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * POST /api/admin/validators/register
@@ -106,7 +136,9 @@ router.get('/validators', requireRole('admin'), listValidators);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/validators/register', requireRole('admin'), registerValidator);
+router.route('/validators/register')
+  .post(requireRole('admin'), registerValidator)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/validators/revoke
@@ -121,7 +153,9 @@ router.post('/validators/register', requireRole('admin'), registerValidator);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/validators/revoke', requireRole('admin'), revokeValidator);
+router.route('/validators/revoke')
+  .post(requireRole('admin'), revokeValidator)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/validators/import
@@ -163,7 +197,9 @@ router.post(
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/contract/pause', requireRole('admin'), pauseContract);
+router.route('/contract/pause')
+  .post(requireRole('admin'), pauseContract)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/contract/unpause
@@ -176,7 +212,9 @@ router.post('/contract/pause', requireRole('admin'), pauseContract);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/contract/unpause', requireRole('admin'), unpauseContract);
+router.route('/contract/unpause')
+  .post(requireRole('admin'), unpauseContract)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/introspect
@@ -190,7 +228,9 @@ router.post('/contract/unpause', requireRole('admin'), unpauseContract);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/introspect', requireRole('admin'), introspectToken);
+router.route('/introspect')
+  .post(requireRole('admin'), introspectToken)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/tokens/revoke
@@ -206,7 +246,9 @@ router.post('/introspect', requireRole('admin'), introspectToken);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/tokens/revoke', requireRole('admin'), revokeTokenController);
+router.route('/tokens/revoke')
+  .post(requireRole('admin'), revokeTokenController)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/indexer/reindex
@@ -219,8 +261,99 @@ router.post('/tokens/revoke', requireRole('admin'), revokeTokenController);
  * @response 400 { success: false, error: string } - Invalid fromLedger
  * @auth Bearer (admin role required)
  */
-router.post('/indexer/reindex', requireRole('admin'), reindex);
+router.route('/indexer/reindex')
+  .post(requireRole('admin'), reindex)
+  .all(methodNotAllowed(['POST']));
 
-router.get('/validators/:wallet/stats', requireRole('admin'), getValidatorStatsEndpoint);
+router.route('/validators/:wallet/stats')
+  .get(requireRole('admin'), getValidatorStatsEndpoint)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+/**
+ * GET /api/admin/feature-flags
+ *
+ * Returns all runtime feature flags and their current enabled state.
+ *
+ * PUT /api/admin/feature-flags
+ *
+ * Updates a feature flag without restarting the process.
+ *
+ * @body { name: string, enabled: boolean }
+ * @response 200 { success: true, data: FeatureFlag }
+ * @auth Bearer (admin role required)
+ */
+router.route('/feature-flags')
+  .get(requireRole('admin'), getFeatureFlags)
+  .put(requireRole('admin'), updateFeatureFlag)
+  .all(methodNotAllowed(['GET', 'PUT', 'HEAD']));
+
+/**
+ * GET /api/admin/actions/pending
+ *
+ * Returns all pending (non-expired, non-executed) multi-admin action proposals.
+ * Results may be stale if an action expired between the listing and the next
+ * sweep, but approval of an expired action is rejected at the service layer.
+ *
+ * GET /api/admin/actions/:id
+ *
+ * Returns details of a specific action proposal including collected signers.
+ *
+ * POST /api/admin/actions/:id/approve
+ *
+ * Co-signs (approves) an existing pending action. Requires the caller to be
+ * a distinct admin wallet that has not already signed. When the threshold of
+ * distinct signatures is met, the action is executed automatically.
+ *
+ * @response 200 { success: true, message, data } - Threshold met, action executed
+ * @response 202 { success: true, message, data } - Signature recorded, more needed
+ * @response 403 { success: false, error } - Not an admin wallet
+ * @response 404 { success: false, error } - Action not found
+ * @response 409 { success: false, error } - Duplicate signer
+ * @response 410 { success: false, error } - Action expired
+ */
+router.route('/actions/pending')
+  .get(requireRole('admin'), getPendingActions)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+router.route('/actions/:id')
+  .get(requireRole('admin'), getPendingActionById)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+router.route('/actions/:id/approve')
+  .post(requireRole('admin'), approvePendingAction)
+  .all(methodNotAllowed(['POST']));
+
+/**
+ * GET /api/admin/webhooks/dead-letters
+ *
+ * Lists webhook deliveries that exhausted their retry attempts, most recent first.
+ * Query params: page (default 1), pageSize (default 20, max 100)
+ *
+ * @response 200 { success: true, data: DeadLetterView[], total, page, pageSize }
+ * @response 400 { success: false, error: string } - Invalid page/pageSize
+ * @auth Bearer (admin role required)
+ */
+router.route('/webhooks/dead-letters')
+  .get(requireRole('admin'), listDeadLetters)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+/**
+ * POST /api/admin/webhooks/:id/replay
+ *
+ * Manually re-attempts delivery of a single dead-lettered webhook, re-signing
+ * the payload with the subscription's current secret. Marks the row as
+ * replayed on success; on failure, updates the attempt count/reason and
+ * leaves it dead-lettered.
+ *
+ * @response 200 { success: true, message: string, data: { id, status } } - Replayed
+ * @response 400 { success: false, error: string } - Invalid id
+ * @response 404 { success: false, error: string } - No such dead letter
+ * @response 409 { success: false, error: string } - Already replayed
+ * @response 502 { success: false, error: string, data: { id, status, attempts } } - Replay failed
+ * @auth Bearer (admin role required)
+ */
+router.route('/webhooks/:id/replay')
+  .post(requireRole('admin'), replayDeadLetter)
+  .all(methodNotAllowed(['POST']));
 
 export default router;

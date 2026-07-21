@@ -13,6 +13,8 @@ import {
   queryPlayers,
   countPlayers,
   upsertPlayer,
+  deactivatePlayer,
+  reactivatePlayer,
 } from "../db";
 
 import { queryMilestones, updateProfile } from "../services/stellar";
@@ -49,8 +51,6 @@ export const filterSchema = z.object({
   region: z.string().optional(),
   position: z.string().optional(),
   minTier: z.coerce.number().int().min(0).max(3).optional(),
-  sortBy: z.enum(['tier', 'region']).optional(),
-  sortOrder: z.enum(['asc', 'desc']).default('asc'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -84,7 +84,7 @@ export async function registerPlayer(
           });
 
     // Invalidate player search cache so new profile appears in results
-    invalidatePlayerCache();
+    await invalidatePlayerCache();
 
     // Write to DB immediately so GET /players/:playerId returns 200 without
     // waiting for the indexer to process the blockchain event (#282).
@@ -137,7 +137,7 @@ export async function getPlayer(
     }
     const playerId = sanitizeInput(req.params.playerId);
     const cacheKey = `players:${playerId}`;
-    let data = cacheGet<Record<string, unknown>>(cacheKey);
+    let data = await cacheGet<Record<string, unknown>>(cacheKey);
     if (!data) {
       const row = getPlayerById(playerId);
       if (!row) {
@@ -153,10 +153,20 @@ export async function getPlayer(
         metadataUri: row.metadata_uri,
         progress_level: row.progress_level,
         created_at: row.created_at,
+        is_active: row.is_active,
         tierName,
         tierDescription,
       };
-      cacheSet(cacheKey, data);
+      await cacheSet(cacheKey, data);
+    }
+
+    if (data.is_active === 0) {
+      const isOwner = req.account && (req.account === data.player_id || req.account === data.wallet);
+      const isAdmin = req.role === 'admin';
+      if (!isOwner && !isAdmin) {
+        res.status(404).json({ success: false, error: "Player not found", code: ErrorCode.PLAYER_NOT_FOUND });
+        return;
+      }
     }
 
     const etag = `"${createHash("sha1").update(JSON.stringify(data)).digest("hex")}"`;
@@ -207,7 +217,7 @@ export async function filterPlayers(
       pageSize,
     })}`;
 
-    const cached = cacheGet<FilterPlayersResult>(cacheKey);
+    const cached = await cacheGet<FilterPlayersResult>(cacheKey);
     if (cached) {
       res.json({ success: true, ...cached });
       return;
@@ -239,7 +249,7 @@ export async function filterPlayers(
     }));
 
     const result: FilterPlayersResult = { data: enriched, total, page, pageSize, pages };
-    cacheSet(cacheKey, result);
+    await cacheSet(cacheKey, result);
 
     const scoutWallet = req.account ?? 'anonymous';
     recordAudit(scoutWallet, 'player_search', {
@@ -286,7 +296,7 @@ export async function updatePlayer(
     });
 
     // Bust the single-player cache so the next GET reflects the update.
-    invalidatePlayerCache(playerId);
+    await invalidatePlayerCache(playerId);
 
     res.status(200).json({
       success: true,
@@ -319,6 +329,20 @@ export async function getPlayerMilestones(
     }
     const playerId = sanitizeInput(req.params.playerId);
 
+    const player = getPlayerById(playerId);
+    if (!player) {
+      res.status(404).json({ success: false, error: "Player not found", code: ErrorCode.PLAYER_NOT_FOUND });
+      return;
+    }
+    if (player.is_active === 0) {
+      const isOwner = req.account && (req.account === player.player_id || req.account === player.wallet);
+      const isAdmin = req.role === 'admin';
+      if (!isOwner && !isAdmin) {
+        res.status(404).json({ success: false, error: "Player not found", code: ErrorCode.PLAYER_NOT_FOUND });
+        return;
+      }
+    }
+
     const parsed = milestonesQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({
@@ -343,6 +367,58 @@ export async function getPlayerMilestones(
       return order === "asc" ? av - bv : bv - av;
     });
     res.json({ success: true, data: combined });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/players/:playerId/deactivate */
+export async function deactivatePlayerEndpoint(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const idResult = playerIdSchema.safeParse(req.params.playerId);
+    if (!idResult.success) {
+      res.status(400).json({ success: false, error: idResult.error.errors[0]?.message ?? "Invalid playerId", code: ErrorCode.VALIDATION_ERROR });
+      return;
+    }
+    const playerId = sanitizeInput(req.params.playerId);
+    const row = getPlayerById(playerId);
+    if (!row) {
+      res.status(404).json({ success: false, error: "Player not found", code: ErrorCode.PLAYER_NOT_FOUND });
+      return;
+    }
+    deactivatePlayer(playerId);
+    await invalidatePlayerCache(playerId);
+    res.json({ success: true, message: "Player profile deactivated successfully" });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/players/:playerId/reactivate */
+export async function reactivatePlayerEndpoint(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const idResult = playerIdSchema.safeParse(req.params.playerId);
+    if (!idResult.success) {
+      res.status(400).json({ success: false, error: idResult.error.errors[0]?.message ?? "Invalid playerId", code: ErrorCode.VALIDATION_ERROR });
+      return;
+    }
+    const playerId = sanitizeInput(req.params.playerId);
+    const row = getPlayerById(playerId);
+    if (!row) {
+      res.status(404).json({ success: false, error: "Player not found", code: ErrorCode.PLAYER_NOT_FOUND });
+      return;
+    }
+    reactivatePlayer(playerId);
+    await invalidatePlayerCache(playerId);
+    res.json({ success: true, message: "Player profile reactivated successfully" });
   } catch (err) {
     next(err);
   }

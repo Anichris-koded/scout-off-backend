@@ -65,7 +65,7 @@ export async function getScoutRecommendations(
       const playerId = String(ev.payload.player_id);
       // We only have player position/region from the players table.
       // Use queryPlayers as a fallback later; here we just count based on player row.
-      const playerRow = queryPlayers({}).find((p) => p.player_id === playerId);
+      const playerRow = queryPlayers({ includeDeactivated: true }).find((p) => p.player_id === playerId);
       if (!playerRow) continue;
       if (playerRow.region)
         regionCounts.set(

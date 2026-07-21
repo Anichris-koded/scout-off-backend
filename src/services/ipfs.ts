@@ -17,9 +17,12 @@
 import { createHash } from 'crypto';
 import axios from 'axios';
 import FormData from 'form-data';
+import { trace, SpanStatusCode } from '@opentelemetry/api';
 import config from '../config';
 import { logger } from '../utils/logger';
-import { insertPendingPin, getPendingPins, deletePendingPin, incrementPendingPinAttempts } from '../db';
+import { insertPendingPin, getPendingPins, deletePendingPin, deletePendingPinByHash, isPendingPinByHash, incrementPendingPinAttempts } from '../db';
+
+const tracer = trace.getTracer('scout-off-backend');
 
 const PINATA_PIN_JSON_URL = 'https://api.pinata.cloud/pinning/pinJSONToIPFS';
 const PINATA_PIN_FILE_URL = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
@@ -48,7 +51,7 @@ function devStubCid(seed: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// pinJson deduplication cache
+// pinJson deduplication cache & inflight promise tracker (#466)
 // ---------------------------------------------------------------------------
 
 /**
@@ -78,76 +81,161 @@ function hashMetadata(body: object): string {
 interface PinCacheEntry { cid: string; timestamp: number; }
 
 /**
- * In-memory deduplication cache for pinJson calls.
- *
- * NOTE: This cache is per-process / in-memory and will NOT deduplicate
- * across multiple server instances — explicitly out of scope for this fix.
- *
- * TODO: There is a theoretical race condition where two near-simultaneous
- * identical requests could both miss the cache before either completes,
- * resulting in two Pinata calls. Resolving this would require an inflight
- * promise cache — not addressed here as no equivalent locking pattern
- * exists in this codebase.
+ * In-memory deduplication cache and in-flight request tracker for pinJson calls.
+ * Uses the pending_pins table as an atomic concurrency guard / mutex.
  */
 const pinJsonCache = new Map<string, PinCacheEntry>();
+const inflightPins = new Map<string, Promise<string>>();
 
 /** Exposed for test teardown only — do not call in production code. */
 export function clearPinJsonCache(): void {
   pinJsonCache.clear();
+  inflightPins.clear();
 }
 
 /**
  * Pin a JSON object to IPFS via Pinata. Returns the CID.
  *
  * Deduplication: the metadata is canonically serialized (sorted keys,
- * recursively) and hashed with sha256.  If an identical hash was pinned
+ * recursively) and hashed with sha256. If an identical hash was pinned
  * within the configured TTL (PIN_JSON_CACHE_TTL_MS, default 5 min) the
- * cached CID is returned immediately without hitting Pinata, preventing
- * duplicate pins on client-side retries after network timeouts.
+ * cached CID is returned immediately without hitting Pinata.
+ *
+ * Atomic Concurrency: pending_pins DB table and in-flight promises act as a mutex
+ * so concurrent identical requests resolve to exactly one Pinata API call.
  */
 export async function pinJson(body: object): Promise<string> {
-  const hash = hashMetadata(body);
-  const ttlMs = config.pinJsonCacheTtlMs;
-  const cached = pinJsonCache.get(hash);
-  if (cached && Date.now() - cached.timestamp < ttlMs) {
-    logger.debug(`[ipfs] pinJson cache hit — returning cached CID (hash=${hash.slice(0, 8)}…)`);
-    return cached.cid;
-  }
+  return tracer.startActiveSpan('ipfs.pinJson', async (span) => {
+    try {
+      const hash = hashMetadata(body);
+      span.setAttribute('ipfs.hash', hash);
 
-  if (!isPinataConfigured()) {
-    if (process.env.NODE_ENV === 'production') assertPinataConfigured();
-    logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinJson');
-    return devStubCid(JSON.stringify(body));
-  }
-  try {
-    const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
-    const cid = res.data.IpfsHash as string;
+      const ttlMs = config.pinJsonCacheTtlMs;
+      const cached = pinJsonCache.get(hash);
+      if (cached && Date.now() - cached.timestamp < ttlMs) {
+        logger.debug(`[ipfs] pinJson cache hit — returning cached CID (hash=${hash.slice(0, 8)}…)`);
+        span.setAttribute('ipfs.cache_hit', true);
+        span.setAttribute('ipfs.cid', cached.cid);
+        return cached.cid;
+      }
 
-    pinJsonCache.set(hash, { cid, timestamp: Date.now() });
+      if (inflightPins.has(hash)) {
+        logger.debug(`[ipfs] pinJson inflight hit — waiting for in-flight request (hash=${hash.slice(0, 8)}…)`);
+        span.setAttribute('ipfs.inflight_hit', true);
+        const cid = await inflightPins.get(hash)!;
+        span.setAttribute('ipfs.cid', cid);
+        return cid;
+      }
 
-    return cid;
-  } catch (err) {
-    logger.critical('[ipfs] Pinata unavailable — queueing payload for retry', (err as Error).message);
-    const now = new Date().toISOString();
-    insertPendingPin({ payload: JSON.stringify(body), created_at: now, last_tried: now });
-    throw err;
-  }
+      if (!isPinataConfigured()) {
+        if (process.env.NODE_ENV === 'production') assertPinataConfigured();
+        logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinJson');
+        const cid = devStubCid(JSON.stringify(body));
+        span.setAttribute('ipfs.stub', true);
+        span.setAttribute('ipfs.cid', cid);
+        return cid;
+      }
+
+      const now = new Date().toISOString();
+      const acquiredLock = insertPendingPin({
+        payload: JSON.stringify(body),
+        hash,
+        created_at: now,
+        last_tried: now,
+      });
+
+      if (acquiredLock === false) {
+        logger.debug(`[ipfs] pinJson lock contended — polling for completion (hash=${hash.slice(0, 8)}…)`);
+        const start = Date.now();
+        const MAX_POLL_MS = 30000;
+        while (Date.now() - start < MAX_POLL_MS) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const pollCached = pinJsonCache.get(hash);
+          if (pollCached && Date.now() - pollCached.timestamp < ttlMs) {
+            span.setAttribute('ipfs.cid', pollCached.cid);
+            return pollCached.cid;
+          }
+          if (inflightPins.has(hash)) {
+            const cid = await inflightPins.get(hash)!;
+            span.setAttribute('ipfs.cid', cid);
+            return cid;
+          }
+          if (!isPendingPinByHash(hash)) {
+            const finalCached = pinJsonCache.get(hash);
+            if (finalCached && Date.now() - finalCached.timestamp < ttlMs) {
+              span.setAttribute('ipfs.cid', finalCached.cid);
+              return finalCached.cid;
+            }
+            break;
+          }
+        }
+      }
+
+      const pinPromise = (async () => {
+        try {
+          const res = await axios.post(PINATA_PIN_JSON_URL, body, { headers: pinataHeaders() });
+          const cid = res.data.IpfsHash as string;
+
+          pinJsonCache.set(hash, { cid, timestamp: Date.now() });
+          return cid;
+        } catch (err) {
+          logger.critical('[ipfs] Pinata unavailable — queueing payload for retry', (err as Error).message);
+          const failTime = new Date().toISOString();
+          insertPendingPin({ payload: JSON.stringify(body), created_at: failTime, last_tried: failTime });
+          throw err;
+        } finally {
+          deletePendingPinByHash(hash);
+          inflightPins.delete(hash);
+        }
+      })();
+
+      inflightPins.set(hash, pinPromise);
+      const cid = await pinPromise;
+      span.setAttribute('ipfs.cid', cid);
+      return cid;
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 /** Pin a file buffer to IPFS via Pinata. Returns the CID. */
 export async function pinFile(buffer: Buffer, filename: string, mimeType: string): Promise<string> {
-  if (!isPinataConfigured()) {
-    if (process.env.NODE_ENV === 'production') assertPinataConfigured();
-    logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinFile');
-    return devStubCid(filename);
-  }
-  const form = new FormData();
-  form.append('file', buffer, { filename, contentType: mimeType });
-  const res = await axios.post(PINATA_PIN_FILE_URL, form, {
-    headers: { ...pinataHeaders(), ...form.getHeaders() },
-    maxBodyLength: Infinity,
+  return tracer.startActiveSpan('ipfs.pinFile', async (span) => {
+    span.setAttribute('ipfs.filename', filename);
+    span.setAttribute('ipfs.mime_type', mimeType);
+    try {
+      if (!isPinataConfigured()) {
+        if (process.env.NODE_ENV === 'production') assertPinataConfigured();
+        logger.warn('[ipfs] Pinata not configured — returning dev stub CID for pinFile');
+        const cid = devStubCid(filename);
+        span.setAttribute('ipfs.stub', true);
+        span.setAttribute('ipfs.cid', cid);
+        return cid;
+      }
+      const form = new FormData();
+      form.append('file', buffer, { filename, contentType: mimeType });
+      const res = await axios.post(PINATA_PIN_FILE_URL, form, {
+        headers: { ...pinataHeaders(), ...form.getHeaders() },
+        maxBodyLength: Infinity,
+      });
+      const cid = res.data.IpfsHash as string;
+      span.setAttribute('ipfs.cid', cid);
+      return cid;
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
+    }
   });
-  return res.data.IpfsHash as string;
 }
 
 /** Build a public gateway URL for a CID. */
@@ -171,12 +259,25 @@ export async function getCid(uriOrCid: string): Promise<string> {
  * Rejects with a clear error in production without credentials.
  */
 export async function checkHealth(): Promise<void> {
-  if (!isPinataConfigured()) {
-    if (process.env.NODE_ENV === 'production') assertPinataConfigured();
-    logger.warn('[ipfs] Pinata not configured — skipping IPFS health check in dev');
-    return;
-  }
-  await axios.get(PINATA_TEST_URL, { headers: pinataHeaders() });
+  return tracer.startActiveSpan('ipfs.checkHealth', async (span) => {
+    try {
+      if (!isPinataConfigured()) {
+        if (process.env.NODE_ENV === 'production') assertPinataConfigured();
+        logger.warn('[ipfs] Pinata not configured — skipping IPFS health check in dev');
+        span.setAttribute('ipfs.configured', false);
+        return;
+      }
+      span.setAttribute('ipfs.configured', true);
+      await axios.get(PINATA_TEST_URL, { headers: pinataHeaders() });
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 /**

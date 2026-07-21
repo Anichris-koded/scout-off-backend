@@ -64,10 +64,10 @@ function makeToken(wallet: string, role: string) {
   return jwt.sign({ sub: wallet, role }, SECRET, { expiresIn: '1h' });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   mockGetPlayerById.mockReset();
   // Clear any cached state from previous tests.
-  invalidatePlayerCache(PLAYER_ROW.player_id);
+  await invalidatePlayerCache(PLAYER_ROW.player_id);
 });
 
 describe('#307 GET /api/players/:playerId — cache hit', () => {
@@ -109,5 +109,34 @@ describe('#307 PUT /api/players/:playerId — cache bust', () => {
     // After bust, next GET must hit DB again (cache miss).
     await request(app).get(`/api/players/${PLAYER_ROW.player_id}`);
     expect(mockGetPlayerById).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns fresh data (not stale cache) immediately after a PUT update', async () => {
+    const OLD_CID = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+    const NEW_CID = 'QmWvjsQmdhSirshEzbPnmdnbMr2wDs4yT6N8pWAxmGaN6d';
+    const oldData = { ...PLAYER_ROW, metadata_uri: OLD_CID };
+    const newData = { ...PLAYER_ROW, metadata_uri: NEW_CID };
+    mockGetPlayerById.mockReturnValue(oldData);
+
+    const token = makeToken(PLAYER_ROW.wallet, 'player');
+
+    // Prime cache with old data.
+    const pre = await request(app).get(`/api/players/${PLAYER_ROW.player_id}`);
+    expect(pre.status).toBe(200);
+    expect(pre.body.data.metadataUri).toBe(OLD_CID);
+
+    const putRes = await request(app)
+      .put(`/api/players/${PLAYER_ROW.player_id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ metadataUri: NEW_CID });
+    expect(putRes.status).toBe(200);
+
+    // After bust, change mock to return new data.
+    mockGetPlayerById.mockReturnValue(newData);
+
+    // GET must return fresh data, not the stale cached response.
+    const post = await request(app).get(`/api/players/${PLAYER_ROW.player_id}`);
+    expect(post.status).toBe(200);
+    expect(post.body.data.metadataUri).toBe(NEW_CID);
   });
 });

@@ -23,6 +23,9 @@ jest.mock('../../src/db', () => ({
   getPlayerProfileHistory: jest.fn().mockReturnValue([]),
   getLatestSubscription: jest.fn().mockReturnValue(null),
   insertSubscription: jest.fn().mockReturnValue(1),
+  insertContactUnlock: jest.fn(),
+  hasContactUnlock: jest.fn().mockReturnValue(false),
+  getContactUnlocksByScout: jest.fn().mockReturnValue([]),
 }));
 
 jest.mock('../../src/services/indexer', () => ({

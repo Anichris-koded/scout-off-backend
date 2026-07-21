@@ -18,6 +18,7 @@ import {
   isSubscribed,
   purchaseSubscription,
   PaymentError,
+  SubscriptionError,
   renewSubscription as stellarRenewSubscription,
   logTrialOffer as stellarLogTrialOffer,
   cancelSubscriptionOnChain,
@@ -28,12 +29,9 @@ import config from '../config';
 import { ErrorCode } from '../utils/errorCodes';
 import { insertTrialOffer, getTrialOffers } from '../services/indexer';
 import { invokeContract, strVal } from '../utils/contract';
+import { isValidEvidenceUri } from '../utils/uriValidator';
 
 // ─── Validation schemas ────────────────────────────────────────────────────────
-
-function isValidEvidenceUri(uri: string): boolean {
-  return uri.startsWith('ipfs://') || uri.startsWith('https://');
-}
 
 export const trialOfferSchema = z.object({
   playerId: z.string().min(1),
@@ -291,8 +289,9 @@ export async function renewSubscription(req: Request, res: Response, next: NextF
 
 /**
  * DELETE /api/scouts/:wallet/subscribe — cancel an active subscription.
- * Returns 404 if no active subscription exists.
- * Records cancellation on-chain and sets cancelled_at locally.
+ * Returns 404 if no active subscription exists locally or on-chain.
+ * Returns 403 if the contract rejects the caller as unauthorized.
+ * Records cancellation on-chain first; DB row is only updated after confirmation.
  */
 export async function cancelSubscription(req: Request, res: Response, next: NextFunction) {
   try {
@@ -308,7 +307,9 @@ export async function cancelSubscription(req: Request, res: Response, next: Next
       return;
     }
 
-    // Record on-chain cancellation intent
+    // Submit on-chain first — DB is only updated after this succeeds.
+    // SubscriptionError (NOT_SUBSCRIBED / UNAUTHORIZED) maps to 4xx.
+    // PaymentError maps to 402. Unexpected errors bubble to the 500 handler.
     const onChainResult = await cancelSubscriptionOnChain(wallet);
 
     const now = Math.floor(Date.now() / 1000);
@@ -325,6 +326,11 @@ export async function cancelSubscription(req: Request, res: Response, next: Next
       },
     });
   } catch (err) {
+    if (err instanceof SubscriptionError) {
+      const status = err.code === 'UNAUTHORIZED' ? 403 : 404;
+      res.status(status).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
     if (err instanceof PaymentError) {
       res.status(402).json({ success: false, error: err.message, code: err.code });
       return;
@@ -387,6 +393,13 @@ export async function unlockContact(req: Request, res: Response, next: NextFunct
     if (req.account !== wallet) {
       logger.warn(`[scout] action=unlock_contact_denied scout=${wallet} playerId=${playerId} reason=wallet_mismatch`);
       res.status(403).json({ success: false, error: 'Forbidden: wallet does not match authenticated account', code: ErrorCode.WALLET_MISMATCH });
+      return;
+    }
+
+    // Idempotent: a player already unlocked by this scout must not be charged again.
+    if (hasContactUnlock(wallet, playerId)) {
+      logger.info(`[scout] action=unlock_contact_already_unlocked scout=${wallet} playerId=${playerId}`);
+      res.json({ success: true, data: { alreadyUnlocked: true } });
       return;
     }
 
