@@ -50,6 +50,12 @@ Liveness check. No auth required.
 }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/health"
+```
+
 ---
 
 ### Auth
@@ -73,6 +79,14 @@ Returns a SEP-10 challenge XDR for the given Stellar account. No auth required.
 }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/auth/challenge?account=GPLAYER1EXAMPLEWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+```
+
+> `account` is a placeholder Stellar public key — substitute the real wallet requesting a challenge.
+
 ---
 
 #### `POST /auth/token`
@@ -83,10 +97,15 @@ Submit a signed SEP-10 XDR to receive a JWT. No auth required.
 
 ```json
 {
-  "signedXdr": "<signed XDR string>",
-  "account": "GABC...XYZ"
+  "transaction": "<signed XDR string>",
+  "role": "scout"
 }
 ```
+
+| Field         | Type   | Required | Description                                                          |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------|
+| `transaction` | string | ✅       | The signed SEP-10 challenge XDR returned from `/auth/challenge`      |
+| `role`        | string | ❌       | Requested role: `player`, `scout`, `validator`, or `admin`           |
 
 **Response `200`**
 
@@ -97,6 +116,19 @@ Submit a signed SEP-10 XDR to receive a JWT. No auth required.
   "expiresAt": 1700000000
 }
 ```
+
+**Example request**
+
+```bash
+curl -X POST "http://localhost:4000/auth/token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transaction": "<signed-xdr-placeholder>",
+    "role": "scout"
+  }'
+```
+
+> `transaction` is a placeholder for the base64 XDR produced by signing the challenge from `/auth/challenge` with the account's Stellar keypair — it cannot be faked without a real signature.
 
 ---
 
@@ -134,6 +166,28 @@ Pin player metadata to IPFS and return the content ID. No auth required.
   }
 }
 ```
+
+**Example request**
+
+```bash
+curl -X POST "http://localhost:4000/api/players/register" \
+  -H "Authorization: Bearer <player-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "wallet": "GPLAYER1EXAMPLEWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "position": "Midfielder",
+    "region": "West Africa",
+    "metadata": {
+      "name": "Kwame Asante",
+      "age": 19,
+      "club": "Accra Lions FC",
+      "highlightReels": ["QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"],
+      "stats": { "topSpeed": "32 km/h" }
+    }
+  }'
+```
+
+> `wallet` must be exactly 56 characters (a Stellar public key) and must match the wallet encoded in the caller's bearer token. Instead of `metadata`, you may alternatively pass a pre-pinned `metadataUri` (a valid IPFS CID) — the endpoint accepts one or the other, not both.
 
 ---
 
@@ -184,6 +238,12 @@ Filter players by region, position, and minimum verified tier. No auth required.
 }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/players?region=West%20Africa&position=Midfielder&minTier=1&page=1&pageSize=20"
+```
+
 ---
 
 #### `GET /api/players/:playerId`
@@ -213,6 +273,12 @@ Retrieve a single player profile. No auth required.
 { "success": false, "error": "Player not found" }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/players/abc123"
+```
+
 ---
 
 #### `GET /api/players/:playerId/milestones`
@@ -239,6 +305,12 @@ Tamper-proof milestone history for a player. No auth required.
 }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/players/abc123/milestones?sortBy=submittedAt&order=asc"
+```
+
 ---
 
 ### Scouts
@@ -259,6 +331,13 @@ Check active subscription status for a scout. **Requires Bearer auth.**
 }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/scouts/GSCOUT1EXAMPLEWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/subscription" \
+  -H "Authorization: Bearer <scout-jwt>"
+```
+
 > ⚠️ **Stubbed** — subscription data is read from indexed contract events; no write endpoint yet.
 
 ---
@@ -274,6 +353,13 @@ List players unlocked by a scout. **Requires Bearer auth.**
   "success": true,
   "data": [{ "playerId": "abc123", "unlockedAt": 1700000000 }]
 }
+```
+
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/scouts/GSCOUT1EXAMPLEWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/contacts" \
+  -H "Authorization: Bearer <scout-jwt>"
 ```
 
 > ⚠️ **Stubbed** — contact data is read from indexed contract events; no write endpoint yet.
@@ -310,6 +396,13 @@ Personalized player recommendations for a scout based on region and position pre
 }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/scouts/GSCOUT1EXAMPLEWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/recommendations?pageSize=20&minTier=1" \
+  -H "Authorization: Bearer <scout-jwt>"
+```
+
 ---
 
 ### Validators
@@ -324,12 +417,15 @@ Pin milestone evidence to IPFS and return the CID. **Requires Bearer auth (valid
 {
   "playerId": "abc123",
   "milestoneType": "performance",
-  "evidence": {
-    "description": "Scored 5 goals in Local Cup",
-    "date": "2024-03-15"
-  }
+  "evidenceUri": "ipfs://QmEvidence1234567890abcdefghijklmnopqrstuvwx"
 }
 ```
+
+| Field           | Type   | Required | Description                                                    |
+| --------------- | ------ | -------- | ---------------------------------------------------------------|
+| `playerId`      | string | ✅       | Target player's ID                                             |
+| `milestoneType` | string | ✅       | One of `identity`, `performance`, `trial_offer`                |
+| `evidenceUri`   | string | ✅       | Evidence location — must start with `ipfs://` or `https://`    |
 
 **Response `201`**
 
@@ -341,6 +437,19 @@ Pin milestone evidence to IPFS and return the CID. **Requires Bearer auth (valid
     "gatewayUrl": "https://gateway.pinata.cloud/ipfs/QmEvidence..."
   }
 }
+```
+
+**Example request**
+
+```bash
+curl -X POST "http://localhost:4000/api/validators/milestone" \
+  -H "Authorization: Bearer <validator-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "playerId": "abc123",
+    "milestoneType": "performance",
+    "evidenceUri": "ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"
+  }'
 ```
 
 ---
@@ -383,6 +492,20 @@ Also available as `GET /api/validators/:wallet/milestones/pending` to filter by 
 }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/validators/milestones/pending?region=West%20Africa&position=Midfielder&page=1&pageSize=20" \
+  -H "Authorization: Bearer <validator-jwt>"
+```
+
+Filtered by a specific validator wallet:
+
+```bash
+curl -X GET "http://localhost:4000/api/validators/GVALIDATOR1EXAMPLEWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/milestones/pending" \
+  -H "Authorization: Bearer <validator-jwt>"
+```
+
 > ⚠️ **Stubbed** — returns events indexed from the contract; approval must be submitted on-chain.
 
 ---
@@ -405,6 +528,13 @@ Platform-wide counts. **Requires Bearer auth (admin role).**
     "events": 500
   }
 }
+```
+
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/admin/stats" \
+  -H "Authorization: Bearer <admin-jwt>"
 ```
 
 ---
@@ -446,6 +576,13 @@ All indexed contract events. **Requires Bearer auth (admin role).**
 }
 ```
 
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/admin/events?startDate=2024-01-01&endDate=2024-12-31&eventType=player_registered&limit=20&offset=0" \
+  -H "Authorization: Bearer <admin-jwt>"
+```
+
 ---
 
 #### `GET /api/admin/fees`
@@ -466,6 +603,13 @@ Fee withdrawal history. **Requires Bearer auth (admin role).**
     }
   ]
 }
+```
+
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/admin/fees" \
+  -H "Authorization: Bearer <admin-jwt>"
 ```
 
 ---
@@ -504,6 +648,13 @@ Admin audit log of actions performed via the API. **Requires Bearer auth (admin 
   "limit": 20,
   "offset": 0
 }
+```
+
+**Example request**
+
+```bash
+curl -X GET "http://localhost:4000/api/admin/audit?startDate=2024-01-01&endDate=2024-12-31&action=milestone_submitted&limit=20&offset=0" \
+  -H "Authorization: Bearer <admin-jwt>"
 ```
 
 ---
