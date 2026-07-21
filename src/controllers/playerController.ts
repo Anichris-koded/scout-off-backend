@@ -54,7 +54,7 @@ export async function registerPlayer(req: Request, res: Response, next: NextFunc
         });
 
     // Invalidate player search cache so new profile appears in results
-    invalidatePlayerCache();
+    await invalidatePlayerCache();
     await dispatchEventWebhook('player_registered', {
       wallet: parsed.wallet,
       position: sanitizedPosition,

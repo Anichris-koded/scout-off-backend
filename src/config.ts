@@ -41,6 +41,10 @@ const config = {
   webhook: {
     enabled: process.env.WEBHOOK_ENABLED === 'true',
     url: process.env.WEBHOOK_URL ?? '',
+    // HMAC secret for the legacy single-subscriber webhook (WEBHOOK_URL). Used to seed a
+    // row in `webhook_subscriptions` on startup for backward compatibility. Real
+    // multi-subscriber deployments should manage subscriptions in the DB instead.
+    secret: process.env.WEBHOOK_SECRET ?? '',
   },
   rateLimit: {
     enabled: process.env.RATE_LIMIT_ENABLED !== 'false',
@@ -51,6 +55,13 @@ const config = {
     // Maximum JSON payload size (default: 1MB)
     json: process.env.JSON_PAYLOAD_LIMIT ?? '1mb',
   },
+  // When set, the search cache (src/services/cache.ts) uses Redis so cache
+  // state is shared across multiple backend instances. When unset (default),
+  // it falls back to an in-memory Map — no setup required for local dev/CI.
+  redisUrl: process.env.REDIS_URL || '',
+  // Default TTL for cache.ts entries written via cacheSet() without an
+  // explicit ttlMs argument.
+  playerCacheTtlMs: parseInt(process.env.PLAYER_CACHE_TTL_MS ?? '60000', 10),
 };
 
 export default config;
