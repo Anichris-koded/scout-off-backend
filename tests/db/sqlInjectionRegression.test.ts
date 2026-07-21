@@ -1,4 +1,5 @@
 import { getDb, queryPlayers, countPlayers, getPlayerById, getPendingMilestones, getEvents, getAuditLogs, getAuditLogsCount, upsertPlayer, getValidatorStats } from '../../src/db';
+import { ContractEventType } from '../../src/types';
 
 const INJECTION_PAYLOADS = [
   "'; DROP TABLE players; --",
@@ -145,13 +146,13 @@ describe('getEvents - SQL injection resistance', () => {
 
   INJECTION_PAYLOADS.forEach((payload) => {
     it(`getEvents treats injection type as literal: ${payload.slice(0, 40)}...`, () => {
-      const rows = getEvents(payload as any);
+      const rows = getEvents(payload as unknown as ContractEventType);
       expect(Array.isArray(rows)).toBe(true);
       // Should match nothing, not throw
     });
 
     it(`getEvents with pagination treats injection safely: ${payload.slice(0, 40)}...`, () => {
-      const rows = getEvents(payload as any, { limit: 10, offset: 0 });
+      const rows = getEvents(payload as unknown as ContractEventType, { limit: 10, offset: 0 });
       expect(Array.isArray(rows)).toBe(true);
     });
   });
