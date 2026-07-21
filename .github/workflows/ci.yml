@@ -51,6 +51,19 @@ jobs:
         run: node node_modules/jest/bin/jest.js --runInBand --forceExit --coverage --coverageReporters=text --coverageReporters=lcov
         env:
           CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./coverage/lcov.info
+          fail_ci_if_error: false
+
+      - name: Upload coverage report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
   contracts:
     name: Soroban Contracts
     runs-on: ubuntu-latest
@@ -75,7 +88,7 @@ jobs:
 
       - name: Build contracts (WASM)
         working-directory: contracts
-        run: cargo build --release
+        run: cargo build --target wasm32-unknown-unknown --release
 
       - name: Test contracts (host target)
         working-directory: contracts

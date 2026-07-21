@@ -131,7 +131,7 @@ function assertErrorEnvelope(body: Record<string, unknown>): void {
 
 const PLAYER_WALLET = 'G' + 'A'.repeat(55);
 const SCOUT_WALLET = 'GDBPLIP2NGJTWRGDEFQ5W32CX2K25S2V7LZMWUJI7GRKQCQAULL5A3MV';
-const VALIDATOR_WALLET = 'G' + 'C'.repeat(55);
+const VALIDATOR_WALLET = Keypair.random().publicKey();
 // Must match the ADMIN_WALLET default set in tests/setup.ts — pauseContract/
 // unpauseContract/withdrawFeesController require the caller's wallet to be in
 // config.adminWallets, not just the JWT role claim.

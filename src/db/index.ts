@@ -178,6 +178,7 @@ export interface PlayerRow {
   metadata_uri: string | null;
   progress_level: number;
   created_at: number | null;
+  is_active: number;
 }
 
 export interface QueryPlayersOptions {
@@ -186,6 +187,7 @@ export interface QueryPlayersOptions {
   minTier?: number;
   limit?: number;
   offset?: number;
+  includeDeactivated?: boolean;
 }
 
 export interface PlayerProfileHistoryRow {
@@ -363,6 +365,16 @@ export function getPlayerById(playerId: string): PlayerRow | null {
   );
 }
 
+export function deactivatePlayer(playerId: string): void {
+  const sql = 'UPDATE players SET is_active = 0 WHERE player_id = ?';
+  timedQuery(sql, () => getDb().prepare(sql).run(playerId));
+}
+
+export function reactivatePlayer(playerId: string): void {
+  const sql = 'UPDATE players SET is_active = 1 WHERE player_id = ?';
+  timedQuery(sql, () => getDb().prepare(sql).run(playerId));
+}
+
 function buildPlayerWhereClause(opts: QueryPlayersOptions): { where: string; params: (string | number)[] } {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -378,6 +390,9 @@ function buildPlayerWhereClause(opts: QueryPlayersOptions): { where: string; par
   if (opts.minTier !== undefined) {
     conditions.push("progress_level >= ?");
     params.push(opts.minTier);
+  }
+  if (!opts.includeDeactivated) {
+    conditions.push("is_active = 1");
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
