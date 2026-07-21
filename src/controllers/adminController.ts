@@ -6,7 +6,7 @@ import { getAllValidators, insertValidator, revokeValidatorRow, getValidatorByWa
 import { isValidStellarAddress } from '../utils/stellarAddress';
 import { logAuditEvent } from '../services/audit';
 import { verifyAuditChain } from '../utils/auditVerify';
-import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, pauseContractOnChain, unpauseContractOnChain } from '../services/stellar';
+import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, pauseContractOnChain, unpauseContractOnChain, registerValidatorOnChain, ValidatorActionError } from '../services/stellar';
 import { revokeToken } from '../services/tokenBlocklist';
 import config from '../config';
 import { logger } from '../utils/logger';
@@ -166,23 +166,80 @@ export async function listValidators(req: Request, res: Response, next: NextFunc
   }
 }
 
-/** POST /api/admin/validators/register */
+/**
+ * POST /api/admin/validators/register
+ * Invokes register_validator(validator) on the Soroban contract via the
+ * platform keypair. The local `validators` row is only inserted after
+ * on-chain confirmation, so a failed/rejected chain call never leaves a
+ * local row that doesn't reflect contract state.
+ */
 export async function registerValidator(req: Request, res: Response, next: NextFunction) {
+  const adminWallet = req.account ?? 'unknown';
+  const { validatorWallet } = req.body as { validatorWallet?: string };
+
+  if (!validatorWallet || !isValidStellarAddress(validatorWallet)) {
+    logger.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
+    res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
+    return;
+  }
+
   try {
-    const adminWallet = req.account ?? 'unknown';
-    const { validatorWallet } = req.body as { validatorWallet?: string };
-
-    if (!validatorWallet || !isValidStellarAddress(validatorWallet)) {
-      logger.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
-      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
-      return;
-    }
-
     logger.info(`[admin] action=register_validator admin=${adminWallet} target=${validatorWallet}`);
-    // TODO: invoke register_validator on Soroban contract
-    insertValidator(validatorWallet);
-    res.status(202).json({ success: true, message: `Validator ${validatorWallet} registration submitted` });
+    // Audit the attempt before submitting the on-chain transaction (pre-transaction state).
+    logAuditEvent({
+      action: 'validator_registration',
+      adminWallet,
+      queryParams: { validatorWallet },
+      timestamp: new Date().toISOString(),
+      contractAction: 'register_validator',
+    });
+
+    const result = await registerValidatorOnChain(validatorWallet);
+
+    // Only mutate the local row once the chain has confirmed the register —
+    // never mark it active locally while the contract call is still in flight.
+    insertValidator(validatorWallet, result.transactionId);
+
+    logAuditEvent({
+      action: 'validator_registration',
+      adminWallet,
+      queryParams: { validatorWallet, transactionId: result.transactionId, outcome: 'success' },
+      timestamp: new Date().toISOString(),
+      contractAction: 'register_validator',
+    });
+
+    res.status(202).json({
+      success: true,
+      message: `Validator ${validatorWallet} registration submitted`,
+      transactionId: result.transactionId,
+    });
   } catch (err) {
+    logAuditEvent({
+      action: 'validator_registration',
+      adminWallet,
+      queryParams: {
+        validatorWallet,
+        error: err instanceof Error ? err.message : 'unknown_error',
+        errorCode: err instanceof ValidatorActionError ? err.code : 'UNKNOWN',
+        outcome: 'failure',
+      },
+      timestamp: new Date().toISOString(),
+      contractAction: 'register_validator',
+    });
+
+    if (err instanceof ValidatorActionError) {
+      switch (err.code) {
+        case 'ALREADY_REGISTERED':
+          res.status(409).json({ success: false, error: 'Validator is already registered on-chain', code: ErrorCode.CONFLICT });
+          return;
+        case 'UNAUTHORIZED':
+          res.status(403).json({ success: false, error: 'Unauthorized to register this validator', code: ErrorCode.FORBIDDEN });
+          return;
+        case 'NETWORK_ERROR':
+          res.status(503).json({ success: false, error: 'Network error; please retry', code: ErrorCode.NETWORK_ERROR });
+          return;
+      }
+    }
     next(err);
   }
 }

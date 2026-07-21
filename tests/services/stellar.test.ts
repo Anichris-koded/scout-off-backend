@@ -80,6 +80,7 @@ import {
   cancelSubscriptionOnChain,
   logTrialOffer,
   pauseContractOnChain,
+  registerValidatorOnChain,
   PaymentError,
   ValidatorActionError,
 } from '../../src/services/stellar';
@@ -400,6 +401,124 @@ describe('pauseContractOnChain', () => {
     mockGetAccount.mockRejectedValue(new Error('network unreachable'));
 
     await expect(pauseContractOnChain()).rejects.toThrow('network unreachable');
+  });
+});
+
+// ─── registerValidatorOnChain ─────────────────────────────────────────────────
+
+describe('registerValidatorOnChain', () => {
+  it('throws PaymentError INVALID_ACCOUNT for empty validatorWallet', async () => {
+    await expect(registerValidatorOnChain('')).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INVALID_ACCOUNT',
+    });
+    expect(mockGetAccount).not.toHaveBeenCalled();
+  });
+
+  it('submits a real Soroban transaction and returns its hash on success', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'real-register-tx-001' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS' });
+
+    const result = await registerValidatorOnChain(WALLET);
+
+    expect(result.transactionId).toBe('real-register-tx-001');
+    expect(mockGetAccount).toHaveBeenCalled();
+    expect(mockSimulate).toHaveBeenCalled();
+    expect(mockAssemble).toHaveBeenCalled();
+    expect(mockSendTransaction).toHaveBeenCalled();
+    expect(mockGetTransaction).toHaveBeenCalledWith('real-register-tx-001');
+  });
+
+  it('polls getTransaction until status is no longer NOT_FOUND', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'register-poll-hash' });
+    mockGetTransaction
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'SUCCESS' });
+
+    jest.useFakeTimers();
+    const promise = registerValidatorOnChain(WALLET);
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
+    expect(result.transactionId).toBe('register-poll-hash');
+    expect(mockGetTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws ValidatorActionError ALREADY_REGISTERED when simulation returns contract error #13', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Contract error: #13' });
+
+    await expect(registerValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'ALREADY_REGISTERED',
+    });
+    expect(mockSendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws ValidatorActionError UNAUTHORIZED when simulation message contains "unauthorized"', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Unauthorized caller' });
+
+    await expect(registerValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'UNAUTHORIZED',
+    });
+  });
+
+  it('throws ValidatorActionError NETWORK_ERROR for an unknown simulation error', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Something went wrong' });
+
+    await expect(registerValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws ValidatorActionError NETWORK_ERROR when sendTransaction returns ERROR status', async () => {
+    mockSendTransaction.mockResolvedValue({
+      status: 'ERROR',
+      errorResult: 'tx_failed',
+      hash: 'register-err-hash',
+    });
+
+    await expect(registerValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'NETWORK_ERROR',
+    });
+    // Transaction never confirmed — getTransaction should NOT be called
+    expect(mockGetTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws ValidatorActionError NETWORK_ERROR when the confirmed transaction has FAILED status', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'register-fail-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'FAILED', resultMetaXdr: '' });
+
+    await expect(registerValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws ValidatorActionError ALREADY_REGISTERED when FAILED tx XDR contains #13', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'register-fail-hash-13' });
+    mockGetTransaction.mockResolvedValue({
+      status: 'FAILED',
+      resultMetaXdr: 'error-payload-#13-encoded',
+    });
+
+    await expect(registerValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'ALREADY_REGISTERED',
+    });
+  });
+
+  it('propagates errors from getAccount (RPC unreachable)', async () => {
+    mockGetAccount.mockRejectedValue(new Error('network unreachable'));
+
+    await expect(registerValidatorOnChain(WALLET)).rejects.toThrow('network unreachable');
   });
 });
 
