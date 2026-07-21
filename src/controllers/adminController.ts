@@ -4,16 +4,16 @@ import jwt from 'jsonwebtoken';
 import { getEvents, getEventsCount, getLastLedger, setLastLedger, getValidatorStats, getAuditLogs, getAuditLogsCount } from '../db';
 import { getAllValidators, insertValidator, revokeValidatorRow, getValidatorByWallet } from '../services/indexer';
 import { isValidStellarAddress } from '../utils/stellarAddress';
-import { ApiResponse, EventRecord, ContractEventType } from '../types';
 import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, unpauseContractOnChain } from '../services/stellar';
 import { revokeToken } from '../services/tokenBlocklist';
 import config from '../config';
 import { logger } from '../utils/logger';
 import { ErrorCode } from '../utils/errorCodes';
-import { proposeAction, approveAction, listPendingActions, getActionDetails, AdminActionType } from '../services/adminMultiSig';
+import { proposeAction, approveAction, listPendingActions, getActionDetails } from '../services/adminMultiSig';
+import type { ApiResponse, EventRecord, ContractEventType } from '../types';
 
-const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
+// Use shared validator for Stellar public keys
 
 /** GET /api/admin/stats */
 export async function getStats(req: Request, res: Response, next: NextFunction) {
@@ -153,7 +153,7 @@ export async function registerValidator(req: Request, res: Response, next: NextF
     const adminWallet = req.account ?? 'unknown';
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
-    if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
+    if (!validatorWallet || !isValidStellarAddress(validatorWallet)) {
       logger.warn(`[admin] register_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
       res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
       return;
@@ -174,7 +174,7 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
     const adminWallet = req.account ?? 'unknown';
     const { validatorWallet } = req.body as { validatorWallet?: string };
 
-    if (!validatorWallet || !STELLAR_ADDRESS_RE.test(validatorWallet)) {
+    if (!validatorWallet || !isValidStellarAddress(validatorWallet)) {
       logger.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
       res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
       return;
@@ -516,7 +516,7 @@ export async function getValidatorStatsEndpoint(req: Request, res: Response, nex
   try {
     const wallet = req.params.wallet;
     // Validate wallet address
-    if (!STELLAR_ADDRESS_RE.test(wallet)) {
+    if (!isValidStellarAddress(wallet)) {
       res.status(400).json({ success: false, error: 'Invalid validator wallet address' });
       return;
     }
