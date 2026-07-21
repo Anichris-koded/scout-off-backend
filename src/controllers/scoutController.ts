@@ -29,12 +29,9 @@ import config from '../config';
 import { ErrorCode } from '../utils/errorCodes';
 import { insertTrialOffer, getTrialOffers } from '../services/indexer';
 import { invokeContract, strVal } from '../utils/contract';
+import { isValidEvidenceUri } from '../utils/uriValidator';
 
 // ─── Validation schemas ────────────────────────────────────────────────────────
-
-function isValidEvidenceUri(uri: string): boolean {
-  return uri.startsWith('ipfs://') || uri.startsWith('https://');
-}
 
 export const trialOfferSchema = z.object({
   playerId: z.string().min(1),

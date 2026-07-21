@@ -1006,3 +1006,80 @@ export function upsertFeatureFlag(p: {
     getDb().prepare(sql).run(p.name, p.enabled, p.updated_at, p.updated_by);
   });
 }
+
+// ─── Multi-admin action helpers ───────────────────────────────────────────────
+
+export interface PendingAdminActionRow {
+  id: string;
+  action_type: string;
+  proposer: string;
+  payload: string;
+  required_signatures: number;
+  collected_signatures: number;
+  status: string;
+  expires_at: number;
+  created_at: number;
+}
+
+export function insertPendingAdminAction(p: {
+  id: string;
+  action_type: string;
+  proposer: string;
+  payload: string;
+  required_signatures: number;
+  expires_at: number;
+  created_at: number;
+}): void {
+  const sql = `INSERT INTO pending_admin_actions (id, action_type, proposer, payload, required_signatures, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  timedQuery(sql, () => getDb().prepare(sql).run(p.id, p.action_type, p.proposer, p.payload, p.required_signatures, p.expires_at, p.created_at));
+}
+
+export function getPendingAdminActionById(id: string): PendingAdminActionRow | null {
+  const sql = `SELECT * FROM pending_admin_actions WHERE id = ?`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(id) as PendingAdminActionRow | undefined) ?? null
+  );
+}
+
+export function getPendingAdminActionsByStatus(status: string): PendingAdminActionRow[] {
+  const sql = `SELECT * FROM pending_admin_actions WHERE status = ? ORDER BY created_at DESC`;
+  return timedQuery(sql, () => getDb().prepare(sql).all(status) as PendingAdminActionRow[]);
+}
+
+export function updatePendingAdminActionStatus(id: string, status: string): void {
+  const sql = `UPDATE pending_admin_actions SET status = ? WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(status, id));
+}
+
+export function incrementActionSignatures(id: string): void {
+  const sql = `UPDATE pending_admin_actions SET collected_signatures = collected_signatures + 1 WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(id));
+}
+
+export function expireStalePendingAdminActions(): number {
+  const sql = `UPDATE pending_admin_actions SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?`;
+  const info = timedQuery(sql, () => getDb().prepare(sql).run(Date.now()));
+  return info.changes;
+}
+
+export function insertAdminActionSignature(p: {
+  action_id: string;
+  signer: string;
+  signed_at: number;
+}): boolean {
+  const sql = `INSERT OR IGNORE INTO admin_action_signatures (action_id, signer, signed_at) VALUES (?, ?, ?)`;
+  const info = timedQuery(sql, () => getDb().prepare(sql).run(p.action_id, p.signer, p.signed_at));
+  return info.changes > 0;
+}
+
+export function getAdminActionSignature(action_id: string, signer: string): { signed_at: number } | null {
+  const sql = `SELECT signed_at FROM admin_action_signatures WHERE action_id = ? AND signer = ?`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(action_id, signer) as { signed_at: number } | undefined) ?? null
+  );
+}
+
+export function getAdminActionSignatures(action_id: string): { signer: string; signed_at: number }[] {
+  const sql = `SELECT signer, signed_at FROM admin_action_signatures WHERE action_id = ? ORDER BY signed_at ASC`;
+  return timedQuery(sql, () => getDb().prepare(sql).all(action_id) as { signer: string; signed_at: number }[]);
+}

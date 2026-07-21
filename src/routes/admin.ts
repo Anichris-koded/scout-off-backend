@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import express from 'express';
-import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, importValidators } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, importValidators, getPendingActions, getPendingActionById, approvePendingAction } from '../controllers/adminController';
 import { getFeatureFlags, updateFeatureFlag } from '../controllers/featureFlagsController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
@@ -268,5 +268,41 @@ router.route('/feature-flags')
   .get(requireRole('admin'), getFeatureFlags)
   .put(requireRole('admin'), updateFeatureFlag)
   .all(methodNotAllowed(['GET', 'PUT', 'HEAD']));
+
+/**
+ * GET /api/admin/actions/pending
+ *
+ * Returns all pending (non-expired, non-executed) multi-admin action proposals.
+ * Results may be stale if an action expired between the listing and the next
+ * sweep, but approval of an expired action is rejected at the service layer.
+ *
+ * GET /api/admin/actions/:id
+ *
+ * Returns details of a specific action proposal including collected signers.
+ *
+ * POST /api/admin/actions/:id/approve
+ *
+ * Co-signs (approves) an existing pending action. Requires the caller to be
+ * a distinct admin wallet that has not already signed. When the threshold of
+ * distinct signatures is met, the action is executed automatically.
+ *
+ * @response 200 { success: true, message, data } - Threshold met, action executed
+ * @response 202 { success: true, message, data } - Signature recorded, more needed
+ * @response 403 { success: false, error } - Not an admin wallet
+ * @response 404 { success: false, error } - Action not found
+ * @response 409 { success: false, error } - Duplicate signer
+ * @response 410 { success: false, error } - Action expired
+ */
+router.route('/actions/pending')
+  .get(requireRole('admin'), getPendingActions)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+router.route('/actions/:id')
+  .get(requireRole('admin'), getPendingActionById)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+router.route('/actions/:id/approve')
+  .post(requireRole('admin'), approvePendingAction)
+  .all(methodNotAllowed(['POST']));
 
 export default router;

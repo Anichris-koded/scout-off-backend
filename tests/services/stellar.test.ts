@@ -62,6 +62,7 @@ jest.mock('@stellar/stellar-sdk', () => ({
   Account:      jest.fn().mockImplementation(() => ({})),
   Address:      { fromString: jest.fn().mockReturnValue({ toScVal: () => ({}) }) },
   scValToNative: jest.fn().mockReturnValue(true),
+  nativeToScVal: jest.fn().mockReturnValue({}),
 }));
 
 // Mock the signer so getPlatformKeypair() returns a deterministic keypair
@@ -76,6 +77,7 @@ import {
   isSubscribed,
   queryMilestones,
   cancelSubscriptionOnChain,
+  logTrialOffer,
   PaymentError,
 } from '../../src/services/stellar';
 
@@ -297,6 +299,145 @@ describe('cancelSubscriptionOnChain', () => {
     mockGetAccount.mockRejectedValue(new Error('network unreachable'));
 
     await expect(cancelSubscriptionOnChain(WALLET)).rejects.toThrow('network unreachable');
+  });
+});
+
+// ─── logTrialOffer ────────────────────────────────────────────────────────────
+
+describe('logTrialOffer', () => {
+  const PLAYER_ID = 'player-123';
+  const DETAILS_URI = 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
+
+  it('throws PaymentError INVALID_ACCOUNT for missing scoutWallet, playerId, or detailsUri', async () => {
+    await expect(logTrialOffer('', PLAYER_ID, DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INVALID_ACCOUNT',
+    });
+    await expect(logTrialOffer(WALLET, '', DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INVALID_ACCOUNT',
+    });
+    await expect(logTrialOffer(WALLET, PLAYER_ID, '')).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INVALID_ACCOUNT',
+    });
+    expect(mockGetAccount).not.toHaveBeenCalled();
+  });
+
+  it('submits a real Soroban transaction and returns the confirmed hash and contract playerTier', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'real-tx-hash-002' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS', returnValue: { type: 'scvU32' } });
+    sdk.scValToNative.mockReturnValue(3);
+
+    const result = await logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI);
+
+    expect(result.transactionId).toBe('real-tx-hash-002');
+    expect(result.playerId).toBe(PLAYER_ID);
+    expect(result.detailsUri).toBe(DETAILS_URI);
+    expect(result.playerTier).toBe(3);
+    expect(mockGetAccount).toHaveBeenCalled();
+    expect(mockSimulate).toHaveBeenCalled();
+    expect(mockAssemble).toHaveBeenCalled();
+    expect(mockSendTransaction).toHaveBeenCalled();
+    expect(mockGetTransaction).toHaveBeenCalledWith('real-tx-hash-002');
+  });
+
+  it('defaults playerTier to 3 when the contract returns no value', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'no-retval-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS' });
+
+    const result = await logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI);
+    expect(result.playerTier).toBe(3);
+  });
+
+  it('polls getTransaction until status is no longer NOT_FOUND before returning', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'poll-hash-2' });
+    mockGetTransaction
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'SUCCESS', returnValue: { type: 'scvU32' } });
+    sdk.scValToNative.mockReturnValue(3);
+
+    jest.useFakeTimers();
+    const promise = logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI);
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
+    expect(result.transactionId).toBe('poll-hash-2');
+    expect(mockGetTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws PaymentError NETWORK_ERROR when getAccount fails', async () => {
+    mockGetAccount.mockRejectedValue(new Error('rpc unreachable'));
+
+    await expect(logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR on simulation error response', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'rpc down' });
+
+    await expect(logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+    expect(mockSendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws PaymentError NETWORK_ERROR when simulateTransaction rejects', async () => {
+    mockSimulate.mockRejectedValue(new Error('connection timeout'));
+
+    await expect(logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR when sendTransaction returns ERROR status', async () => {
+    mockSendTransaction.mockResolvedValue({
+      status: 'ERROR',
+      errorResult: 'tx_failed',
+      hash: 'err-hash',
+    });
+
+    await expect(logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+    expect(mockGetTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws PaymentError NETWORK_ERROR when sendTransaction rejects', async () => {
+    mockSendTransaction.mockRejectedValue(new Error('submit unreachable'));
+
+    await expect(logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR when the confirmed transaction has FAILED status', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'fail-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'FAILED' });
+
+    await expect(logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR when getTransaction polling rejects', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'poll-fail-hash' });
+    mockGetTransaction.mockRejectedValue(new Error('poll unreachable'));
+
+    await expect(logTrialOffer(WALLET, PLAYER_ID, DETAILS_URI)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
   });
 });
 
