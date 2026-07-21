@@ -11,7 +11,7 @@ import { revokeToken } from '../services/tokenBlocklist';
 import config from '../config';
 import { logger } from '../utils/logger';
 import { ErrorCode } from '../utils/errorCodes';
-import { proposeAction, approveAction, listPendingActions, getActionDetails, AdminActionType } from '../services/adminMultiSig';
+import { proposeAction, approveAction, listPendingActions, getActionDetails } from '../services/adminMultiSig';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
