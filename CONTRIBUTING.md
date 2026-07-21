@@ -15,9 +15,14 @@ Welcome! This guide covers contribution workflows, code standards, and critical 
 
 ### Prerequisites
 
-- Node.js ≥ 18
+- Node.js — see [`.nvmrc`](.nvmrc) for the exact version used by CI (currently Node 20)
+  - If you use **nvm**: `nvm install && nvm use` (reads `.nvmrc` automatically)
+  - If you use **fnm**: `fnm install && fnm use`
+  - If you use **asdf**: `asdf install nodejs` (reads `.nvmrc` via the Node.js plugin)
 - npm ≥ 9
 - Git
+
+> **`.nvmrc` is the single source of truth** for the Node.js version. CI workflows read it via `node-version-file: '.nvmrc'`, so bumping the version in that one file keeps local dev and CI in sync.
 
 ### Setup
 
@@ -25,6 +30,8 @@ Welcome! This guide covers contribution workflows, code standards, and critical 
    ```bash
    git clone https://github.com/scout-off/scout-off-backend.git
    cd scout-off-backend
+   # Pick up the correct Node version automatically (nvm/fnm/asdf)
+   nvm use   # or: fnm use
    npm install
    ```
 
@@ -335,43 +342,14 @@ We track ~125 active issues. Use these guidelines to help us prioritize efficien
    Related to #456
    ```
 
-### Issue Template
+### Issue Templates
 
-```markdown
-## Summary
-One-line description.
-
-## Category
-[ ] Bug [ ] Feature [ ] Performance [ ] Documentation
-[ ] Refactor [ ] Infra [ ] Security [ ] Test
-
-## Priority (Estimated)
-[ ] P0 – Critical [ ] P1 – High [ ] P2 – Medium [ ] P3 – Low
-
-## Environment
-- OS: [macOS/Linux/Windows]
-- Node: [version]
-- npm: [version]
-- Network: [testnet/mainnet/local]
-
-## Description
-Detailed explanation of the issue or proposal.
-
-## Steps (for bugs)
-1.
-2.
-3.
-
-## Expected vs. Actual (for bugs)
-- Expected: …
-- Actual: …
-
-## Proposed Solution (for features)
-How would this be implemented?
-
-## Related Issues
-Fixes #XXX / Related to #YYY
-```
+Structured issue templates are available at `.github/ISSUE_TEMPLATE/`.
+When you click **New issue** on GitHub, choose the appropriate template
+— **Bug report** for bugs, **Feature request** for new capabilities.
+The templates prompt for the sections outlined above (repro steps,
+environment, acceptance criteria, etc.) so issues arrive with
+consistent detail.
 
 ## Getting Help
 

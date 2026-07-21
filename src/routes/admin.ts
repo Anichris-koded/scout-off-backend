@@ -1,8 +1,11 @@
 import { Router } from 'express';
-import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog } from '../controllers/adminController';
+import express from 'express';
+import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, importValidators, getPendingActions, getPendingActionById, approvePendingAction } from '../controllers/adminController';
+import { getFeatureFlags, updateFeatureFlag } from '../controllers/featureFlagsController';
 import { exportEvents } from '../controllers/exportController';
 import { requireRole } from '../middleware/auth';
 import { ipAllowlistMiddleware } from '../middleware/ipAllowlist';
+import { methodNotAllowed } from '../middleware/methodNotAllowed';
 
 const router = Router();
 
@@ -17,7 +20,9 @@ router.use(ipAllowlistMiddleware);
  * @response 200 { success: true, data: { players, milestones, subscriptions, events } }
  * @auth Bearer (admin role required)
  */
-router.get('/stats', requireRole('admin'), getStats);
+router.route('/stats')
+  .get(requireRole('admin'), getStats)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/admin/events
@@ -29,7 +34,9 @@ router.get('/stats', requireRole('admin'), getStats);
  * @response 400 { success: false, error: string } - Invalid date range
  * @auth Bearer (any authenticated user)
  */
-router.get('/events', requireRole('admin'), getAllEvents);
+router.route('/events')
+  .get(requireRole('admin'), getAllEvents)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/admin/events/export
@@ -42,7 +49,9 @@ router.get('/events', requireRole('admin'), getAllEvents);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.get('/events/export', requireRole('admin'), exportEvents);
+router.route('/events/export')
+  .get(requireRole('admin'), exportEvents)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/admin/fees
@@ -52,21 +61,7 @@ router.get('/events/export', requireRole('admin'), exportEvents);
  *
  * @response 200 { success: true, data: FeeHistoryItem[] }
  * @auth Bearer (admin role required)
- */
-router.get('/fees', requireRole('admin'), getFeeSummary);
-
-/**
- * GET /api/admin/audit
  *
- * Returns paginated audit log entries. Supports `startDate`, `endDate` (ISO 8601),
- * `action` filters, and `limit`/`offset` pagination.
- *
- * @response 200 { success: true, data: AuditLogRow[], total, limit, offset }
- * @auth Bearer (admin role required)
- */
-router.get('/audit', requireRole('admin'), getAuditLog);
-
-/**
  * POST /api/admin/fees
  *
  * Withdraws accumulated platform fees from the Soroban contract to a specified recipient.
@@ -79,7 +74,23 @@ router.get('/audit', requireRole('admin'), getAuditLog);
  * @response 409 { success: false, error: string } - No fees available
  * @auth Bearer (admin role required)
  */
-router.post('/fees', requireRole('admin'), withdrawFeesController);
+router.route('/fees')
+  .get(requireRole('admin'), getFeeSummary)
+  .post(requireRole('admin'), withdrawFeesController)
+  .all(methodNotAllowed(['GET', 'POST', 'HEAD']));
+
+/**
+ * GET /api/admin/audit
+ *
+ * Returns paginated audit log entries. Supports `startDate`, `endDate` (ISO 8601),
+ * `action` filters, and `limit`/`offset` pagination.
+ *
+ * @response 200 { success: true, data: AuditLogRow[], total, limit, offset }
+ * @auth Bearer (admin role required)
+ */
+router.route('/audit')
+  .get(requireRole('admin'), getAuditLog)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/admin/validators
@@ -90,7 +101,9 @@ router.post('/fees', requireRole('admin'), withdrawFeesController);
  * @response 200 { success: true, data: ValidatorRow[] }
  * @auth Bearer (admin role required)
  */
-router.get('/validators', requireRole('admin'), listValidators);
+router.route('/validators')
+  .get(requireRole('admin'), listValidators)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * POST /api/admin/validators/register
@@ -105,7 +118,9 @@ router.get('/validators', requireRole('admin'), listValidators);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/validators/register', requireRole('admin'), registerValidator);
+router.route('/validators/register')
+  .post(requireRole('admin'), registerValidator)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/validators/revoke
@@ -120,7 +135,38 @@ router.post('/validators/register', requireRole('admin'), registerValidator);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/validators/revoke', requireRole('admin'), revokeValidator);
+router.route('/validators/revoke')
+  .post(requireRole('admin'), revokeValidator)
+  .all(methodNotAllowed(['POST']));
+
+/**
+ * POST /api/admin/validators/import
+ *
+ * Bulk-onboards validators from a CSV or JSON batch.
+ * Accepts either:
+ *   - JSON body: { validators: [{ wallet, label?, region? }, …] }
+ *   - CSV body (Content-Type: text/csv): rows of wallet[,label[,region]]
+ *
+ * Each entry is validated and processed through the same single-registration
+ * path. Invalid addresses and already-registered (non-revoked) validators are
+ * skipped per-entry rather than failing the whole batch.
+ *
+ * @body { validators: ValidatorEntry[] } | CSV text
+ * @response 200 { success: true, data: { results, summary } }
+ * @response 400 { success: false, error: string } - Empty or unparseable body
+ * @response 401 { success: false, error: string } - Missing token
+ * @response 403 { success: false, error: string } - Non-admin role
+ * @auth Bearer (admin role required)
+ */
+router.post(
+  '/validators/import',
+  requireRole('admin'),
+  // Parse text/csv and text/plain bodies as raw strings so the controller
+  // can handle CSV formatting. JSON bodies are already parsed by the global
+  // express.json() middleware in app.ts.
+  express.text({ type: ['text/csv', 'text/plain'], limit: '1mb' }),
+  importValidators,
+);
 
 /**
  * POST /api/admin/contract/pause
@@ -133,7 +179,9 @@ router.post('/validators/revoke', requireRole('admin'), revokeValidator);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/contract/pause', requireRole('admin'), pauseContract);
+router.route('/contract/pause')
+  .post(requireRole('admin'), pauseContract)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/contract/unpause
@@ -146,7 +194,9 @@ router.post('/contract/pause', requireRole('admin'), pauseContract);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/contract/unpause', requireRole('admin'), unpauseContract);
+router.route('/contract/unpause')
+  .post(requireRole('admin'), unpauseContract)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/introspect
@@ -160,7 +210,9 @@ router.post('/contract/unpause', requireRole('admin'), unpauseContract);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/introspect', requireRole('admin'), introspectToken);
+router.route('/introspect')
+  .post(requireRole('admin'), introspectToken)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/tokens/revoke
@@ -176,7 +228,9 @@ router.post('/introspect', requireRole('admin'), introspectToken);
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
  */
-router.post('/tokens/revoke', requireRole('admin'), revokeTokenController);
+router.route('/tokens/revoke')
+  .post(requireRole('admin'), revokeTokenController)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/admin/indexer/reindex
@@ -189,8 +243,66 @@ router.post('/tokens/revoke', requireRole('admin'), revokeTokenController);
  * @response 400 { success: false, error: string } - Invalid fromLedger
  * @auth Bearer (admin role required)
  */
-router.post('/indexer/reindex', requireRole('admin'), reindex);
+router.route('/indexer/reindex')
+  .post(requireRole('admin'), reindex)
+  .all(methodNotAllowed(['POST']));
 
-router.get('/validators/:wallet/stats', requireRole('admin'), getValidatorStatsEndpoint);
+router.route('/validators/:wallet/stats')
+  .get(requireRole('admin'), getValidatorStatsEndpoint)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+/**
+ * GET /api/admin/feature-flags
+ *
+ * Returns all runtime feature flags and their current enabled state.
+ *
+ * PUT /api/admin/feature-flags
+ *
+ * Updates a feature flag without restarting the process.
+ *
+ * @body { name: string, enabled: boolean }
+ * @response 200 { success: true, data: FeatureFlag }
+ * @auth Bearer (admin role required)
+ */
+router.route('/feature-flags')
+  .get(requireRole('admin'), getFeatureFlags)
+  .put(requireRole('admin'), updateFeatureFlag)
+  .all(methodNotAllowed(['GET', 'PUT', 'HEAD']));
+
+/**
+ * GET /api/admin/actions/pending
+ *
+ * Returns all pending (non-expired, non-executed) multi-admin action proposals.
+ * Results may be stale if an action expired between the listing and the next
+ * sweep, but approval of an expired action is rejected at the service layer.
+ *
+ * GET /api/admin/actions/:id
+ *
+ * Returns details of a specific action proposal including collected signers.
+ *
+ * POST /api/admin/actions/:id/approve
+ *
+ * Co-signs (approves) an existing pending action. Requires the caller to be
+ * a distinct admin wallet that has not already signed. When the threshold of
+ * distinct signatures is met, the action is executed automatically.
+ *
+ * @response 200 { success: true, message, data } - Threshold met, action executed
+ * @response 202 { success: true, message, data } - Signature recorded, more needed
+ * @response 403 { success: false, error } - Not an admin wallet
+ * @response 404 { success: false, error } - Action not found
+ * @response 409 { success: false, error } - Duplicate signer
+ * @response 410 { success: false, error } - Action expired
+ */
+router.route('/actions/pending')
+  .get(requireRole('admin'), getPendingActions)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+router.route('/actions/:id')
+  .get(requireRole('admin'), getPendingActionById)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+router.route('/actions/:id/approve')
+  .post(requireRole('admin'), approvePendingAction)
+  .all(methodNotAllowed(['POST']));
 
 export default router;

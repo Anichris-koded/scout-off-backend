@@ -89,6 +89,13 @@ export function getDb(): Database.Database {
   return _db;
 }
 
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}
+
 // ─── State helpers ────────────────────────────────────────────────────────────
 
 export function getLastLedger(): number {
@@ -635,15 +642,26 @@ export interface PendingPinRow {
   attempts: number;
   created_at: string;
   last_tried: string | null;
+  hash?: string | null;
 }
 
 export function insertPendingPin(p: {
   payload: string;
   created_at: string;
   last_tried: string;
-}): void {
-  const sql = `INSERT INTO pending_pins (payload, created_at, last_tried) VALUES (?, ?, ?)`;
-  timedQuery(sql, () => getDb().prepare(sql).run(p.payload, p.created_at, p.last_tried));
+  hash?: string | null;
+}): boolean {
+  if (p.hash) {
+    const sql = `INSERT OR IGNORE INTO pending_pins (payload, hash, created_at, last_tried) VALUES (?, ?, ?, ?)`;
+    return timedQuery(sql, () => {
+      const info = getDb().prepare(sql).run(p.payload, p.hash, p.created_at, p.last_tried);
+      return info.changes > 0;
+    });
+  } else {
+    const sql = `INSERT INTO pending_pins (payload, created_at, last_tried) VALUES (?, ?, ?)`;
+    timedQuery(sql, () => getDb().prepare(sql).run(p.payload, p.created_at, p.last_tried));
+    return true;
+  }
 }
 
 export function getPendingPins(): PendingPinRow[] {
@@ -656,7 +674,397 @@ export function deletePendingPin(id: number): void {
   timedQuery(sql, () => getDb().prepare(sql).run(id));
 }
 
+export function deletePendingPinByHash(hash: string): void {
+  const sql = 'DELETE FROM pending_pins WHERE hash = ?';
+  timedQuery(sql, () => getDb().prepare(sql).run(hash));
+}
+
+export function isPendingPinByHash(hash: string): boolean {
+  const sql = 'SELECT 1 FROM pending_pins WHERE hash = ? LIMIT 1';
+  return timedQuery(sql, () => getDb().prepare(sql).get(hash) !== undefined);
+}
+
 export function incrementPendingPinAttempts(id: number): void {
   const sql = 'UPDATE pending_pins SET attempts = attempts + 1, last_tried = ? WHERE id = ?';
   timedQuery(sql, () => getDb().prepare(sql).run(new Date().toISOString(), id));
+}
+
+// ─── Scout player notes helpers (#488) ───────────────────────────────────────
+
+export interface ScoutPlayerNoteRow {
+  id: number;
+  scout_wallet: string;
+  player_id: string;
+  note_text: string;
+  updated_at: number;
+}
+
+/**
+ * Create or update a private note for a scout on a specific player.
+ * Uses upsert semantics: calling twice for the same (scout_wallet, player_id)
+ * pair overwrites the note rather than creating a duplicate row.
+ */
+export function upsertScoutNote(p: {
+  scout_wallet: string;
+  player_id: string;
+  note_text: string;
+  updated_at: number;
+}): void {
+  const sql = `
+    INSERT INTO scout_player_notes (scout_wallet, player_id, note_text, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(scout_wallet, player_id) DO UPDATE SET
+      note_text  = excluded.note_text,
+      updated_at = excluded.updated_at
+  `;
+  timedQuery(sql, () =>
+    getDb().prepare(sql).run(p.scout_wallet, p.player_id, p.note_text, p.updated_at),
+  );
+}
+
+/**
+ * Retrieve a single private note by scout wallet + player id.
+ * Returns null when no note exists.
+ */
+export function getScoutNote(
+  scoutWallet: string,
+  playerId: string,
+): ScoutPlayerNoteRow | null {
+  const sql =
+    'SELECT * FROM scout_player_notes WHERE scout_wallet = ? AND player_id = ? LIMIT 1';
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(scoutWallet, playerId) as ScoutPlayerNoteRow | undefined) ?? null,
+  );
+}
+
+/**
+ * List all private notes authored by a scout, ordered newest-first.
+ */
+export function getScoutNotes(scoutWallet: string): ScoutPlayerNoteRow[] {
+  const sql =
+    'SELECT * FROM scout_player_notes WHERE scout_wallet = ? ORDER BY updated_at DESC';
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(scoutWallet) as ScoutPlayerNoteRow[],
+  );
+}
+
+// ─── API key helpers (#490) ───────────────────────────────────────────────────
+
+export interface ApiKeyRow {
+  id: number;
+  key_hash: string;
+  scout_wallet: string;
+  label: string;
+  created_at: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+}
+
+/**
+ * Persist a new API key.  Only the salted hash is stored; the caller must
+ * have already generated the hash before calling this function.
+ * Returns the new row id.
+ */
+export function insertApiKey(p: {
+  key_hash: string;
+  scout_wallet: string;
+  label: string;
+  created_at: number;
+}): number {
+  const sql = `
+    INSERT INTO api_keys (key_hash, scout_wallet, label, created_at)
+    VALUES (?, ?, ?, ?)
+  `;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(p.key_hash, p.scout_wallet, p.label, p.created_at);
+    return info.lastInsertRowid as number;
+  });
+}
+
+/**
+ * List all non-revoked API keys for a scout wallet.
+ */
+export function listApiKeysByWallet(scoutWallet: string): ApiKeyRow[] {
+  const sql = `
+    SELECT * FROM api_keys
+    WHERE scout_wallet = ?
+    ORDER BY created_at DESC
+  `;
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(scoutWallet) as ApiKeyRow[],
+  );
+}
+
+/**
+ * Revoke an API key by its row id.
+ * Only revokes keys belonging to the given scout wallet for security.
+ * Returns true when a row was updated, false when not found.
+ */
+export function revokeApiKeyById(id: number, scoutWallet: string): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const sql = `
+    UPDATE api_keys SET revoked_at = ?
+    WHERE id = ? AND scout_wallet = ? AND revoked_at IS NULL
+  `;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(now, id, scoutWallet);
+    return info.changes > 0;
+  });
+}
+
+/**
+ * Look up an API key row by its full hash value (including salt prefix).
+ * Returns null when not found or already revoked.
+ */
+export function getApiKeyByHash(keyHash: string): ApiKeyRow | null {
+  const sql = `SELECT * FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL LIMIT 1`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(keyHash) as ApiKeyRow | undefined) ?? null,
+  );
+}
+
+/**
+ * Return all active (non-revoked) API keys across all scouts.
+ * Used by auth middleware to verify an incoming X-API-Key header.
+ */
+export function getAllActiveApiKeys(): ApiKeyRow[] {
+  const sql = `SELECT * FROM api_keys WHERE revoked_at IS NULL`;
+  return timedQuery(sql, () => getDb().prepare(sql).all() as ApiKeyRow[]);
+}
+
+/**
+ * Update the last_used_at timestamp for an API key.
+ */
+export function touchApiKeyLastUsed(id: number): void {
+  const now = Math.floor(Date.now() / 1000);
+  const sql = `UPDATE api_keys SET last_used_at = ? WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(now, id));
+}
+
+// ─── Scout bookmarks helpers (#487) ──────────────────────────────────────────
+
+export interface ScoutBookmarkRow {
+  id: number;
+  scout_wallet: string;
+  player_id: string;
+  created_at: number;
+}
+
+/**
+ * Insert a bookmark.  Uses INSERT OR IGNORE so re-bookmarking is idempotent.
+ * Returns true when a new row was inserted, false when it already existed.
+ */
+export function insertBookmark(p: {
+  scout_wallet: string;
+  player_id: string;
+  created_at: number;
+}): boolean {
+  const sql = `
+    INSERT OR IGNORE INTO scout_bookmarks (scout_wallet, player_id, created_at)
+    VALUES (?, ?, ?)
+  `;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(p.scout_wallet, p.player_id, p.created_at);
+    return info.changes > 0;
+  });
+}
+
+/**
+ * Delete a bookmark.
+ * Returns true when a row was deleted, false when it did not exist.
+ */
+export function deleteBookmark(scoutWallet: string, playerId: string): boolean {
+  const sql = `DELETE FROM scout_bookmarks WHERE scout_wallet = ? AND player_id = ?`;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(scoutWallet, playerId);
+    return info.changes > 0;
+  });
+}
+
+/**
+ * List all bookmarks for a scout, ordered by creation time (newest first).
+ */
+export function getBookmarksByScout(scoutWallet: string): ScoutBookmarkRow[] {
+  const sql = `
+    SELECT * FROM scout_bookmarks
+    WHERE scout_wallet = ?
+    ORDER BY created_at DESC
+  `;
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(scoutWallet) as ScoutBookmarkRow[],
+  );
+}
+
+// ─── Scout saved-search helpers (#486) ───────────────────────────────────────
+
+export interface SavedSearchRow {
+  id: number;
+  scout_wallet: string;
+  name: string;
+  filters: string; // JSON string
+  created_at: number;
+}
+
+/**
+ * Insert a new saved search for a scout.
+ * Returns the new row id.
+ */
+export function insertSavedSearch(p: {
+  scout_wallet: string;
+  name: string;
+  filters: string; // pre-serialised JSON
+  created_at: number;
+}): number {
+  const sql = `
+    INSERT INTO scout_saved_searches (scout_wallet, name, filters, created_at)
+    VALUES (?, ?, ?, ?)
+  `;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(p.scout_wallet, p.name, p.filters, p.created_at);
+    return info.lastInsertRowid as number;
+  });
+}
+
+/**
+ * List all saved searches for a scout, ordered newest-first.
+ */
+export function getSavedSearchesByScout(scoutWallet: string): SavedSearchRow[] {
+  const sql = `
+    SELECT * FROM scout_saved_searches
+    WHERE scout_wallet = ?
+    ORDER BY created_at DESC
+  `;
+  return timedQuery(sql, () =>
+    getDb().prepare(sql).all(scoutWallet) as SavedSearchRow[],
+  );
+}
+
+/**
+ * Delete a saved search by id.
+ * Only deletes rows belonging to the given scout wallet for security.
+ * Returns true when a row was deleted, false when it did not exist.
+ */
+export function deleteSavedSearch(id: number, scoutWallet: string): boolean {
+  const sql = `DELETE FROM scout_saved_searches WHERE id = ? AND scout_wallet = ?`;
+  return timedQuery(sql, () => {
+    const info = getDb().prepare(sql).run(id, scoutWallet);
+    return info.changes > 0;
+  });
+}
+
+// ─── Feature flags (#494) ─────────────────────────────────────────────────────
+
+export interface FeatureFlagRow {
+  name: string;
+  enabled: number;
+  updated_at: number;
+  updated_by: string;
+}
+
+export function getAllFeatureFlags(): FeatureFlagRow[] {
+  const sql = `SELECT * FROM feature_flags ORDER BY name`;
+  return timedQuery(sql, () => getDb().prepare(sql).all() as FeatureFlagRow[]);
+}
+
+export function getFeatureFlag(name: string): FeatureFlagRow | null {
+  const sql = `SELECT * FROM feature_flags WHERE name = ?`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(name) as FeatureFlagRow | undefined) ?? null,
+  );
+}
+
+export function upsertFeatureFlag(p: {
+  name: string;
+  enabled: number;
+  updated_at: number;
+  updated_by: string;
+}): void {
+  const sql = `
+    INSERT INTO feature_flags (name, enabled, updated_at, updated_by)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      enabled = excluded.enabled,
+      updated_at = excluded.updated_at,
+      updated_by = excluded.updated_by
+  `;
+  timedQuery(sql, () => {
+    getDb().prepare(sql).run(p.name, p.enabled, p.updated_at, p.updated_by);
+  });
+}
+
+// ─── Multi-admin action helpers ───────────────────────────────────────────────
+
+export interface PendingAdminActionRow {
+  id: string;
+  action_type: string;
+  proposer: string;
+  payload: string;
+  required_signatures: number;
+  collected_signatures: number;
+  status: string;
+  expires_at: number;
+  created_at: number;
+}
+
+export function insertPendingAdminAction(p: {
+  id: string;
+  action_type: string;
+  proposer: string;
+  payload: string;
+  required_signatures: number;
+  expires_at: number;
+  created_at: number;
+}): void {
+  const sql = `INSERT INTO pending_admin_actions (id, action_type, proposer, payload, required_signatures, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  timedQuery(sql, () => getDb().prepare(sql).run(p.id, p.action_type, p.proposer, p.payload, p.required_signatures, p.expires_at, p.created_at));
+}
+
+export function getPendingAdminActionById(id: string): PendingAdminActionRow | null {
+  const sql = `SELECT * FROM pending_admin_actions WHERE id = ?`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(id) as PendingAdminActionRow | undefined) ?? null
+  );
+}
+
+export function getPendingAdminActionsByStatus(status: string): PendingAdminActionRow[] {
+  const sql = `SELECT * FROM pending_admin_actions WHERE status = ? ORDER BY created_at DESC`;
+  return timedQuery(sql, () => getDb().prepare(sql).all(status) as PendingAdminActionRow[]);
+}
+
+export function updatePendingAdminActionStatus(id: string, status: string): void {
+  const sql = `UPDATE pending_admin_actions SET status = ? WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(status, id));
+}
+
+export function incrementActionSignatures(id: string): void {
+  const sql = `UPDATE pending_admin_actions SET collected_signatures = collected_signatures + 1 WHERE id = ?`;
+  timedQuery(sql, () => getDb().prepare(sql).run(id));
+}
+
+export function expireStalePendingAdminActions(): number {
+  const sql = `UPDATE pending_admin_actions SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?`;
+  const info = timedQuery(sql, () => getDb().prepare(sql).run(Date.now()));
+  return info.changes;
+}
+
+export function insertAdminActionSignature(p: {
+  action_id: string;
+  signer: string;
+  signed_at: number;
+}): boolean {
+  const sql = `INSERT OR IGNORE INTO admin_action_signatures (action_id, signer, signed_at) VALUES (?, ?, ?)`;
+  const info = timedQuery(sql, () => getDb().prepare(sql).run(p.action_id, p.signer, p.signed_at));
+  return info.changes > 0;
+}
+
+export function getAdminActionSignature(action_id: string, signer: string): { signed_at: number } | null {
+  const sql = `SELECT signed_at FROM admin_action_signatures WHERE action_id = ? AND signer = ?`;
+  return timedQuery(sql, () =>
+    (getDb().prepare(sql).get(action_id, signer) as { signed_at: number } | undefined) ?? null
+  );
+}
+
+export function getAdminActionSignatures(action_id: string): { signer: string; signed_at: number }[] {
+  const sql = `SELECT signer, signed_at FROM admin_action_signatures WHERE action_id = ? ORDER BY signed_at ASC`;
+  return timedQuery(sql, () => getDb().prepare(sql).all(action_id) as { signer: string; signed_at: number }[]);
 }
