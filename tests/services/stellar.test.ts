@@ -62,6 +62,7 @@ jest.mock('@stellar/stellar-sdk', () => ({
   Account:      jest.fn().mockImplementation(() => ({})),
   Address:      { fromString: jest.fn().mockReturnValue({ toScVal: () => ({}) }) },
   scValToNative: jest.fn().mockReturnValue(true),
+  nativeToScVal: jest.fn().mockReturnValue({}),
 }));
 
 // Mock the signer so getPlatformKeypair() returns a deterministic keypair
@@ -76,6 +77,7 @@ import {
   isSubscribed,
   queryMilestones,
   cancelSubscriptionOnChain,
+  purchaseSubscription,
   PaymentError,
 } from '../../src/services/stellar';
 
@@ -297,6 +299,168 @@ describe('cancelSubscriptionOnChain', () => {
     mockGetAccount.mockRejectedValue(new Error('network unreachable'));
 
     await expect(cancelSubscriptionOnChain(WALLET)).rejects.toThrow('network unreachable');
+  });
+});
+
+// ─── purchaseSubscription ─────────────────────────────────────────────────────
+
+describe('purchaseSubscription', () => {
+  const EXPIRES_AT = 1_800_000_000;
+
+  beforeEach(() => {
+    // purchaseSubscription defaults — happy path, contract returns the expiry
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS', returnValue: { type: 'scvU64' } });
+    sdk.scValToNative.mockReturnValue(EXPIRES_AT);
+  });
+
+  it('throws PaymentError INVALID_ACCOUNT for empty wallet', async () => {
+    await expect(purchaseSubscription('', 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INVALID_ACCOUNT',
+    });
+    expect(mockGetAccount).not.toHaveBeenCalled();
+  });
+
+  it('submits a real Soroban transaction and returns the confirmed hash and on-chain expiresAt', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'real-sub-tx-hash' });
+
+    const result = await purchaseSubscription(WALLET, 'basic', 30);
+
+    expect(result.transactionId).toBe('real-sub-tx-hash');
+    expect(result.tier).toBe('basic');
+    expect(result.expiresAt).toBe(EXPIRES_AT);
+    expect(result.status).toBe('active');
+    expect(mockGetAccount).toHaveBeenCalled();
+    expect(mockSimulate).toHaveBeenCalled();
+    expect(mockAssemble).toHaveBeenCalled();
+    expect(mockSendTransaction).toHaveBeenCalled();
+    expect(mockGetTransaction).toHaveBeenCalledWith('real-sub-tx-hash');
+  });
+
+  it('polls getTransaction until status is no longer NOT_FOUND before returning', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'poll-sub-hash' });
+    mockGetTransaction
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'SUCCESS', returnValue: { type: 'scvU64' } });
+
+    jest.useFakeTimers();
+    const promise = purchaseSubscription(WALLET, 'premium', 90);
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
+    expect(result.transactionId).toBe('poll-sub-hash');
+    expect(mockGetTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws PaymentError INSUFFICIENT_FUNDS when simulation returns contract error #7', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Contract error: #7' });
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INSUFFICIENT_FUNDS',
+    });
+    expect(mockSendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws PaymentError INSUFFICIENT_FUNDS when simulation message contains "InsufficientFee"', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'InsufficientFee' });
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INSUFFICIENT_FUNDS',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR for an unrelated simulation error', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Something went wrong' });
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR when simulateTransaction rejects', async () => {
+    mockSimulate.mockRejectedValue(new Error('connection timeout'));
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError INSUFFICIENT_FUNDS when sendTransaction ERROR carries a #7 result', async () => {
+    mockSendTransaction.mockResolvedValue({
+      status: 'ERROR',
+      errorResult: 'Contract error: #7',
+      hash: 'err-hash',
+    });
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INSUFFICIENT_FUNDS',
+    });
+    expect(mockGetTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws PaymentError NETWORK_ERROR when sendTransaction returns an unrelated ERROR status', async () => {
+    mockSendTransaction.mockResolvedValue({
+      status: 'ERROR',
+      errorResult: 'tx_failed',
+      hash: 'err-hash',
+    });
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR when the confirmed transaction has FAILED status', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'fail-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'FAILED', resultMetaXdr: '' });
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError INSUFFICIENT_FUNDS when the FAILED tx XDR contains #7', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'fail-hash-7' });
+    mockGetTransaction.mockResolvedValue({
+      status: 'FAILED',
+      resultMetaXdr: 'error-payload-#7-encoded',
+    });
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INSUFFICIENT_FUNDS',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR when the contract returns no expiry value', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'no-retval-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS' });
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('propagates PaymentError NETWORK_ERROR when getAccount fails', async () => {
+    mockGetAccount.mockRejectedValue(new Error('network unreachable'));
+
+    await expect(purchaseSubscription(WALLET, 'basic', 30)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
   });
 });
 
