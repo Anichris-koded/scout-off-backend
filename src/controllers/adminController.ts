@@ -19,7 +19,7 @@ import { revokeToken } from '../services/tokenBlocklist';
 import config from '../config';
 import { logger } from '../utils/logger';
 import { ErrorCode } from '../utils/errorCodes';
-import { proposeAction, approveAction, listPendingActions, getActionDetails, AdminActionType } from '../services/adminMultiSig';
+import { proposeAction, approveAction, listPendingActions, getActionDetails } from '../services/adminMultiSig';
 
 // Use shared validator for Stellar public keys
 
@@ -524,7 +524,7 @@ export async function getValidatorStatsEndpoint(req: Request, res: Response, nex
   try {
     const wallet = req.params.wallet;
     // Validate wallet address
-    if (!STELLAR_ADDRESS_RE.test(wallet)) {
+    if (!isValidStellarAddress(wallet)) {
       res.status(400).json({ success: false, error: 'Invalid validator wallet address' });
       return;
     }
