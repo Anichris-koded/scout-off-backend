@@ -1,7 +1,7 @@
 /**
  * Tests for stellar.ts service functions:
  *   - isSubscribed()              — view-only simulation call
- *   - queryMilestones()           — stub returning []
+ *   - queryMilestones()           — view-only simulation call
  *   - cancelSubscriptionOnChain() — real Soroban invocation
  *   - pauseContractOnChain()      — real Soroban invocation
  *
@@ -153,14 +153,121 @@ describe('isSubscribed', () => {
 // ─── queryMilestones ──────────────────────────────────────────────────────────
 
 describe('queryMilestones', () => {
-  it('returns an empty array for a valid playerId (stub)', async () => {
-    const result = await queryMilestones('GPLAYER123');
-    expect(Array.isArray(result)).toBe(true);
-    expect(result).toHaveLength(0);
+  const PLAYER_ID = 'GPLAYER123';
+
+  // Fixture mimicking scValToNative()'s output for a get_milestones Vec<Milestone>
+  // return value: the contract struct fields are snake_case and carry no
+  // milestone id of their own (see contracts/progress/src/lib.rs MilestoneData).
+  const FIXTURE_MILESTONES = [
+    {
+      player_id: PLAYER_ID,
+      milestone_type: 'identity',
+      evidence_uri: 'ipfs://QmIdentityEvidence',
+      validator: 'GVALIDATOR000000000000000000000000000000000000000000000',
+      approved: true,
+      submitted_at: 1700000000,
+    },
+    {
+      player_id: PLAYER_ID,
+      milestone_type: 'performance',
+      evidence_uri: 'ipfs://QmPerformanceEvidence',
+      validator: 'GVALIDATOR000000000000000000000000000000000000000000000',
+      approved: false,
+      submitted_at: 1700000100,
+    },
+  ];
+
+  it('throws PaymentError INVALID_ACCOUNT for an empty playerId without calling the RPC', async () => {
+    await expect(queryMilestones('')).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INVALID_ACCOUNT',
+    });
+    expect(mockSimulate).not.toHaveBeenCalled();
   });
 
-  it('throws PaymentError for an empty playerId', async () => {
-    await expect(queryMilestones('')).rejects.toThrow(PaymentError);
+  it('invokes get_milestones via simulateTransaction and parses a fixture Vec<Milestone> response', async () => {
+    mockSimulate.mockResolvedValue({ result: { retval: { type: 'scvVec' } } });
+    sdk.scValToNative.mockReturnValue(FIXTURE_MILESTONES);
+
+    const result = await queryMilestones(PLAYER_ID);
+
+    expect(mockSimulate).toHaveBeenCalled();
+    // Read-only view call — never signs or submits a transaction.
+    expect(mockSendTransaction).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        milestoneId: '0',
+        playerId: PLAYER_ID,
+        milestoneType: 'identity',
+        evidenceUri: 'ipfs://QmIdentityEvidence',
+        approved: true,
+        approvedBy: 'GVALIDATOR000000000000000000000000000000000000000000000',
+        ledger: 1700000000,
+      },
+      {
+        milestoneId: '1',
+        playerId: PLAYER_ID,
+        milestoneType: 'performance',
+        evidenceUri: 'ipfs://QmPerformanceEvidence',
+        approved: false,
+        approvedBy: null,
+        ledger: 1700000100,
+      },
+    ]);
+  });
+
+  it('returns an empty array for a player with no milestones (not an error)', async () => {
+    mockSimulate.mockResolvedValue({ result: { retval: { type: 'scvVec' } } });
+    sdk.scValToNative.mockReturnValue([]);
+
+    const result = await queryMilestones(PLAYER_ID);
+    expect(result).toEqual([]);
+  });
+
+  it('returns an empty array when the simulation returns no retval', async () => {
+    mockSimulate.mockResolvedValue({ result: null });
+
+    const result = await queryMilestones(PLAYER_ID);
+    expect(result).toEqual([]);
+  });
+
+  it('throws PaymentError MISSING_PLAYER when simulation reports contract error #3', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Contract error: #3' });
+
+    await expect(queryMilestones(PLAYER_ID)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'MISSING_PLAYER',
+    });
+  });
+
+  it('throws PaymentError MISSING_PLAYER when simulation message contains "player not found"', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'PlayerNotFound' });
+
+    await expect(queryMilestones(PLAYER_ID)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'MISSING_PLAYER',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR for an unrelated simulation error', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Something went wrong' });
+
+    await expect(queryMilestones(PLAYER_ID)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws PaymentError NETWORK_ERROR when simulateTransaction rejects', async () => {
+    mockSimulate.mockRejectedValue(new Error('connection timeout'));
+
+    await expect(queryMilestones(PLAYER_ID)).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'NETWORK_ERROR',
+    });
   });
 });
 
