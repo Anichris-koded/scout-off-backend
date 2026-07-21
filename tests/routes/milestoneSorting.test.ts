@@ -18,7 +18,21 @@ jest.mock('../../src/db', () => ({
   ]),
   queryPlayers: jest.fn().mockReturnValue([]),
   countPlayers: jest.fn().mockReturnValue(0),
-  getPlayerById: jest.fn().mockReturnValue(null),
+  getPlayerById: jest.fn().mockImplementation((id) => {
+    if (id === 'player-1') {
+      return {
+        player_id: 'player-1',
+        wallet: 'G' + 'A'.repeat(55),
+        position: 'striker',
+        region: 'europe',
+        metadata_uri: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+        progress_level: 1,
+        created_at: 1700000000,
+        is_active: 1,
+      };
+    }
+    return null;
+  }),
   insertPlayerProfileHistory: jest.fn(),
   getPlayerProfileHistory: jest.fn().mockReturnValue([]),
   getLatestSubscription: jest.fn().mockReturnValue(null),

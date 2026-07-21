@@ -75,7 +75,7 @@ jobs:
 
       - name: Build contracts (WASM)
         working-directory: contracts
-        run: cargo build --release
+        run: cargo build --target wasm32-unknown-unknown --release
 
       - name: Test contracts (host target)
         working-directory: contracts

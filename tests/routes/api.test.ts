@@ -16,7 +16,21 @@ jest.mock('../../src/db', () => ({
   getEvents: jest.fn().mockReturnValue([]),
   queryPlayers: jest.fn().mockReturnValue([]),
   countPlayers: jest.fn().mockReturnValue(0),
-  getPlayerById: jest.fn().mockReturnValue(null),
+  getPlayerById: jest.fn().mockImplementation((id) => {
+    if (id === 'player_123') {
+      return {
+        player_id: 'player_123',
+        wallet: 'G' + 'A'.repeat(55),
+        position: 'striker',
+        region: 'europe',
+        metadata_uri: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+        progress_level: 1,
+        created_at: 1700000000,
+        is_active: 1,
+      };
+    }
+    return null;
+  }),
   getEventsCount: jest.fn().mockReturnValue(0),
   insertPlayerProfileHistory: jest.fn(),
   getPlayerProfileHistory: jest.fn().mockReturnValue([]),
@@ -151,7 +165,7 @@ describe('POST /api/players/register', () => {
 
 describe('GET /api/players/:playerId route validation', () => {
   it('accepts a valid player ID and returns 404 when the player does not exist', async () => {
-    const res = await request(app).get('/api/players/player_123');
+    const res = await request(app).get('/api/players/player_non_existent');
     expect(res.status).toBe(404);
     expect(res.body.success).toBe(false);
   });
