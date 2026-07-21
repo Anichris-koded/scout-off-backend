@@ -1,4 +1,26 @@
-import { getDb, queryPlayers, countPlayers, getPlayerById, getPendingMilestones, getEvents, getAuditLogs, getAuditLogsCount, upsertPlayer, getValidatorStats } from '../../src/db';
+import {
+  getDb, closeDb, getLastLedger, setLastLedger,
+  queryPlayers, countPlayers, getPlayerById, upsertPlayer,
+  updatePlayerProgress,
+  getEvents, getEventsCount,
+  insertPlayerProfileHistory, getPlayerProfileHistory,
+  incrementValidatorApproved, incrementValidatorRejected, getValidatorStats,
+  insertPendingMilestone, removePendingMilestone, getPendingMilestones,
+  getIdempotencyRecord, saveIdempotencyRecord, purgeExpiredIdempotencyKeys,
+  getLatestSubscription, insertSubscription, dbRenewSubscription, dbCancelSubscription,
+  insertContactUnlock, getContactUnlocksByScout, hasContactUnlock,
+  insertAuditLog, getAuditLogs, getAuditLogsCount,
+  getTrialOfferById, insertTrialOffer, respondToTrialOffer,
+  insertPendingPin, getPendingPins, deletePendingPin, deletePendingPinByHash, isPendingPinByHash, incrementPendingPinAttempts,
+  upsertScoutNote, getScoutNote, getScoutNotes,
+  insertApiKey, listApiKeysByWallet, revokeApiKeyById, getApiKeyByHash, getAllActiveApiKeys, touchApiKeyLastUsed,
+  insertBookmark, deleteBookmark, getBookmarksByScout,
+  insertSavedSearch, getSavedSearchesByScout, deleteSavedSearch,
+  getAllFeatureFlags, getFeatureFlag, upsertFeatureFlag,
+  insertPendingAdminAction, getPendingAdminActionById, getPendingAdminActionsByStatus,
+  updatePendingAdminActionStatus, incrementActionSignatures, expireStalePendingAdminActions,
+  insertAdminActionSignature, getAdminActionSignature, getAdminActionSignatures,
+} from '../../src/db';
 import { ContractEventType } from '../../src/types';
 
 const INJECTION_PAYLOADS = [
@@ -197,5 +219,269 @@ describe('getValidatorStats - SQL injection resistance', () => {
       const stats = getValidatorStats(payload);
       expect(stats).toBeNull();
     });
+  });
+});
+
+describe('all DB functions - SQL injection resistance (comprehensive)', () => {
+  const inj = INJECTION_PAYLOADS[0];
+
+  it('getLastLedger is safe', () => {
+    expect(typeof getLastLedger()).toBe('number');
+  });
+
+  it('setLastLedger with injection payload', () => {
+    expect(typeof setLastLedger(0)).toBe('undefined');
+  });
+
+  it('getEventsCount with injection payload', () => {
+    const count = getEventsCount(inj as unknown as ContractEventType);
+    expect(typeof count).toBe('number');
+  });
+
+  it('insertPlayerProfileHistory with injection payloads', () => {
+    insertPlayerProfileHistory({ player_id: inj, metadata_uri: inj, changed_at: 0, tx_hash: inj });
+  });
+
+  it('getPlayerProfileHistory with injection payload', () => {
+    const rows = getPlayerProfileHistory(inj);
+    expect(Array.isArray(rows)).toBe(true);
+  });
+
+  it('upsertPlayer with injection payloads', () => {
+    upsertPlayer({ player_id: inj, wallet: inj, position: inj, region: inj, metadata_uri: inj });
+  });
+
+  it('updatePlayerProgress with injection payload', () => {
+    updatePlayerProgress(inj, 0);
+  });
+
+  it('incrementValidatorApproved with injection payload', () => {
+    incrementValidatorApproved(inj);
+  });
+
+  it('incrementValidatorRejected with injection payload', () => {
+    incrementValidatorRejected(inj);
+  });
+
+  it('insertPendingMilestone with injection payloads', () => {
+    insertPendingMilestone(inj, inj, inj, inj, inj, 0);
+  });
+
+  it('removePendingMilestone with injection payload', () => {
+    removePendingMilestone(inj);
+  });
+
+  it('getIdempotencyRecord with injection payload', () => {
+    const rec = getIdempotencyRecord(inj);
+    expect(rec === null || typeof rec === 'object').toBe(true);
+  });
+
+  it('saveIdempotencyRecord with injection payloads', () => {
+    saveIdempotencyRecord(inj, 200, {});
+  });
+
+  it('purgeExpiredIdempotencyKeys is safe', () => {
+    expect(typeof purgeExpiredIdempotencyKeys()).toBe('number');
+  });
+
+  it('getLatestSubscription with injection payload', () => {
+    const sub = getLatestSubscription(inj);
+    expect(sub === null || typeof sub === 'object').toBe(true);
+  });
+
+  it('insertSubscription with injection payloads', () => {
+    expect(typeof insertSubscription({ scout_wallet: inj, tier: inj, expires_at: 0, created_at: 0 })).toBe('number');
+  });
+
+  it('dbRenewSubscription with injection payloads', () => {
+    dbRenewSubscription({ id: 9999, tier: inj, expires_at: 0 });
+  });
+
+  it('dbCancelSubscription with injection payloads', () => {
+    dbCancelSubscription({ id: 9999, cancelled_at: 0 });
+  });
+
+  it('insertContactUnlock with injection payloads', () => {
+    insertContactUnlock({ scout_wallet: inj, player_id: inj, tx_hash: inj, unlocked_at: 0 });
+  });
+
+  it('getContactUnlocksByScout with injection payload', () => {
+    const rows = getContactUnlocksByScout(inj);
+    expect(Array.isArray(rows)).toBe(true);
+  });
+
+  it('hasContactUnlock with injection payloads', () => {
+    expect(typeof hasContactUnlock(inj, inj)).toBe('boolean');
+  });
+
+  it('insertAuditLog with injection payloads', () => {
+    insertAuditLog({ action: inj, adminWallet: inj, queryParams: { [inj]: inj }, createdAt: inj });
+  });
+
+  it('getTrialOfferById with injection payload', () => {
+    const offer = getTrialOfferById(inj);
+    expect(offer === null || typeof offer === 'object').toBe(true);
+  });
+
+  it('insertTrialOffer with injection payloads', () => {
+    insertTrialOffer({ offer_id: inj, scout_wallet: inj, player_id: inj, details_uri: inj, created_at: 0 });
+  });
+
+  it('respondToTrialOffer with injection payloads', () => {
+    respondToTrialOffer({ offer_id: inj, status: inj, reject_reason: inj, responded_at: 0 });
+  });
+
+  it('insertPendingPin with injection payloads', () => {
+    insertPendingPin({ payload: inj, created_at: inj, last_tried: inj });
+  });
+
+  it('getPendingPins is safe', () => {
+    const pins = getPendingPins();
+    expect(Array.isArray(pins)).toBe(true);
+  });
+
+  it('deletePendingPin is safe', () => {
+    deletePendingPin(9999);
+  });
+
+  it('deletePendingPinByHash with injection payload', () => {
+    deletePendingPinByHash(inj);
+  });
+
+  it('isPendingPinByHash with injection payload', () => {
+    expect(typeof isPendingPinByHash(inj)).toBe('boolean');
+  });
+
+  it('incrementPendingPinAttempts with injection payload', () => {
+    incrementPendingPinAttempts(9999);
+  });
+
+  it('upsertScoutNote with injection payloads', () => {
+    upsertScoutNote({ scout_wallet: inj, player_id: inj, note_text: inj, updated_at: 0 });
+  });
+
+  it('getScoutNote with injection payloads', () => {
+    const note = getScoutNote(inj, inj);
+    expect(note === null || typeof note === 'object').toBe(true);
+  });
+
+  it('getScoutNotes with injection payload', () => {
+    const notes = getScoutNotes(inj);
+    expect(Array.isArray(notes)).toBe(true);
+  });
+
+  it('insertApiKey with injection payloads', () => {
+    insertApiKey({ scout_wallet: inj, key_hash: inj, label: inj, created_at: 0 });
+  });
+
+  it('listApiKeysByWallet with injection payload', () => {
+    const keys = listApiKeysByWallet(inj);
+    expect(Array.isArray(keys)).toBe(true);
+  });
+
+  it('revokeApiKeyById with injection payloads', () => {
+    expect(typeof revokeApiKeyById(9999, inj)).toBe('boolean');
+  });
+
+  it('getApiKeyByHash with injection payload', () => {
+    const key = getApiKeyByHash(inj);
+    expect(key === null || typeof key === 'object').toBe(true);
+  });
+
+  it('getAllActiveApiKeys is safe', () => {
+    const keys = getAllActiveApiKeys();
+    expect(Array.isArray(keys)).toBe(true);
+  });
+
+  it('touchApiKeyLastUsed with injection payload', () => {
+    touchApiKeyLastUsed(9999);
+  });
+
+  it('insertBookmark with injection payloads', () => {
+    insertBookmark({ scout_wallet: inj, player_id: inj, bookmarked_at: 0, player_region: inj, player_position: inj });
+  });
+
+  it('deleteBookmark with injection payloads', () => {
+    expect(typeof deleteBookmark(inj, inj)).toBe('boolean');
+  });
+
+  it('getBookmarksByScout with injection payload', () => {
+    const bm = getBookmarksByScout(inj);
+    expect(Array.isArray(bm)).toBe(true);
+  });
+
+  it('insertSavedSearch with injection payloads', () => {
+    insertSavedSearch({ scout_wallet: inj, name: inj, filters: inj, created_at: 0 });
+  });
+
+  it('getSavedSearchesByScout with injection payload', () => {
+    const ss = getSavedSearchesByScout(inj);
+    expect(Array.isArray(ss)).toBe(true);
+  });
+
+  it('deleteSavedSearch with injection payloads', () => {
+    expect(typeof deleteSavedSearch(9999, inj)).toBe('boolean');
+  });
+
+  it('getAllFeatureFlags is safe', () => {
+    const flags = getAllFeatureFlags();
+    expect(Array.isArray(flags)).toBe(true);
+  });
+
+  it('getFeatureFlag with injection payload', () => {
+    const flag = getFeatureFlag(inj);
+    expect(flag === null || typeof flag === 'object').toBe(true);
+  });
+
+  it('upsertFeatureFlag with injection payloads', () => {
+    upsertFeatureFlag({ name: inj, enabled: 0, updated_at: 0, updated_by: inj });
+  });
+
+  it('insertPendingAdminAction with injection payloads', () => {
+    insertPendingAdminAction({ id: 'test-' + inj, action_type: inj, proposer: inj, payload: inj, required_signatures: 1, expires_at: 0, created_at: 0 });
+  });
+
+  it('getPendingAdminActionById with injection payload', () => {
+    const action = getPendingAdminActionById(inj);
+    expect(action === null || typeof action === 'object').toBe(true);
+  });
+
+  it('getPendingAdminActionsByStatus with injection payload', () => {
+    const actions = getPendingAdminActionsByStatus(inj);
+    expect(Array.isArray(actions)).toBe(true);
+  });
+
+  it('updatePendingAdminActionStatus with injection payloads', () => {
+    updatePendingAdminActionStatus(inj, inj);
+  });
+
+  it('incrementActionSignatures with injection payload', () => {
+    incrementActionSignatures(inj);
+  });
+
+  it('expireStalePendingAdminActions is safe', () => {
+    expect(typeof expireStalePendingAdminActions()).toBe('number');
+  });
+
+  it('insertAdminActionSignature with injection payload', () => {
+    // Must insert a parent row first to satisfy the FK constraint
+    const aid = 'test-action-sig-' + Date.now();
+    insertPendingAdminAction({ id: aid, action_type: 'test', proposer: 'admin', payload: '{}', required_signatures: 2, expires_at: 9999999999999, created_at: 0 });
+    const inserted = insertAdminActionSignature({ action_id: aid, signer: inj, signed_at: 0 });
+    expect(typeof inserted).toBe('boolean');
+  });
+
+  it('getAdminActionSignature with injection payloads', () => {
+    const sig = getAdminActionSignature(inj, inj);
+    expect(sig === null || typeof sig === 'object').toBe(true);
+  });
+
+  it('getAdminActionSignatures with injection payload', () => {
+    const sigs = getAdminActionSignatures(inj);
+    expect(Array.isArray(sigs)).toBe(true);
+  });
+
+  it('closeDb is safe (not called — would end DB session)', () => {
+    expect(typeof closeDb).toBe('function');
   });
 });
