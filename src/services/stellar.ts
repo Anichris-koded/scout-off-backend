@@ -10,7 +10,10 @@ import {
   scValToNative,
   nativeToScVal,
 } from '@stellar/stellar-sdk';
+import { trace, SpanStatusCode } from '@opentelemetry/api';
 import config from '../config';
+
+const tracer = trace.getTracer('scout-off-backend');
 
 const server = new SorobanRpc.Server(config.sorobanRpcUrl, {
   allowHttp: config.sorobanRpcUrl.startsWith('http://'),
@@ -69,51 +72,65 @@ export async function stellarHealth(): Promise<boolean> {
 export async function isSubscribed(
   scoutWallet: string,
 ): Promise<{ active: boolean; expiresAt: string | null }> {
-  if (!scoutWallet) {
-    throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
-  }
+  return tracer.startActiveSpan('stellar.isSubscribed', async (span) => {
+    span.setAttribute('stellar.contract_function', 'is_subscribed');
+    try {
+      if (!scoutWallet) {
+        throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
+      }
 
-  try {
-    const contract = new Contract(config.contractId);
-    // Use a random ephemeral keypair as the simulation source — no on-chain
-    // auth is required for this view-only call, and we never submit the tx.
-    const ephemeral = Keypair.random();
-    const sourceAccount = new Account(ephemeral.publicKey(), '0');
+      try {
+        const contract = new Contract(config.contractId);
+        // Use a random ephemeral keypair as the simulation source — no on-chain
+        // auth is required for this view-only call, and we never submit the tx.
+        const ephemeral = Keypair.random();
+        const sourceAccount = new Account(ephemeral.publicKey(), '0');
 
-    const tx = new TransactionBuilder(sourceAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: networkPassphrase(),
-    })
-      .addOperation(
-        contract.call('is_subscribed', Address.fromString(scoutWallet).toScVal()),
-      )
-      .setTimeout(30)
-      .build();
+        const tx = new TransactionBuilder(sourceAccount, {
+          fee: BASE_FEE,
+          networkPassphrase: networkPassphrase(),
+        })
+          .addOperation(
+            contract.call('is_subscribed', Address.fromString(scoutWallet).toScVal()),
+          )
+          .setTimeout(30)
+          .build();
 
-    const simResult = await server.simulateTransaction(tx);
+        const simResult = await server.simulateTransaction(tx);
 
-    if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new PaymentError(
-        `Contract simulation failed: ${simResult.error}`,
-        'NETWORK_ERROR',
-      );
+        if (SorobanRpc.Api.isSimulationError(simResult)) {
+          throw new PaymentError(
+            `Contract simulation failed: ${simResult.error}`,
+            'NETWORK_ERROR',
+          );
+        }
+
+        const successSim = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+        const retval = successSim.result?.retval;
+        if (!retval) {
+          span.setAttribute('stellar.active', false);
+          return { active: false, expiresAt: null };
+        }
+
+        const active = scValToNative(retval) as boolean;
+        span.setAttribute('stellar.active', active);
+        return { active, expiresAt: active ? '' : null };
+      } catch (err) {
+        if (err instanceof PaymentError) throw err;
+        throw new PaymentError(
+          `RPC call failed: ${(err as Error).message}`,
+          'NETWORK_ERROR',
+        );
+      }
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
     }
-
-    const successSim = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
-    const retval = successSim.result?.retval;
-    if (!retval) {
-      return { active: false, expiresAt: null };
-    }
-
-    const active = scValToNative(retval) as boolean;
-    return { active, expiresAt: active ? '' : null };
-  } catch (err) {
-    if (err instanceof PaymentError) throw err;
-    throw new PaymentError(
-      `RPC call failed: ${(err as Error).message}`,
-      'NETWORK_ERROR',
-    );
-  }
+  });
 }
 
 /**
@@ -160,89 +177,104 @@ export async function logTrialOffer(
   playerId: string,
   detailsUri: string,
 ): Promise<TrialOfferResult> {
-  if (!scoutWallet || !playerId || !detailsUri) {
-    throw new PaymentError('Missing scoutWallet, playerId, or detailsUri', 'INVALID_ACCOUNT');
-  }
+  return tracer.startActiveSpan('stellar.logTrialOffer', async (span) => {
+    span.setAttribute('stellar.contract_function', 'log_trial_offer');
+    span.setAttribute('stellar.player_id', playerId);
+    try {
+      if (!scoutWallet || !playerId || !detailsUri) {
+        throw new PaymentError('Missing scoutWallet, playerId, or detailsUri', 'INVALID_ACCOUNT');
+      }
 
-  const { getPlatformKeypair } = await import('../utils/signer');
-  const keypair = getPlatformKeypair();
+      const { getPlatformKeypair } = await import('../utils/signer');
+      const keypair = getPlatformKeypair();
 
-  let account;
-  try {
-    account = await server.getAccount(keypair.publicKey());
-  } catch (err) {
-    throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
-  }
+      let account;
+      try {
+        account = await server.getAccount(keypair.publicKey());
+      } catch (err) {
+        throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
 
-  const contract = new Contract(config.contractId);
+      const contract = new Contract(config.contractId);
 
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: networkPassphrase(),
-  })
-    .addOperation(
-      contract.call(
-        'log_trial_offer',
-        Address.fromString(scoutWallet).toScVal(),
-        nativeToScVal(playerId, { type: 'string' }),
-        nativeToScVal(detailsUri, { type: 'string' }),
-      ),
-    )
-    .setTimeout(30)
-    .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: networkPassphrase(),
+      })
+        .addOperation(
+          contract.call(
+            'log_trial_offer',
+            Address.fromString(scoutWallet).toScVal(),
+            nativeToScVal(playerId, { type: 'string' }),
+            nativeToScVal(detailsUri, { type: 'string' }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-  let simResult;
-  try {
-    simResult = await server.simulateTransaction(tx);
-  } catch (err) {
-    throw new PaymentError(`Simulation request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
-  }
+      let simResult;
+      try {
+        simResult = await server.simulateTransaction(tx);
+      } catch (err) {
+        throw new PaymentError(`Simulation request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
 
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new PaymentError(`Simulation failed: ${simResult.error}`, 'NETWORK_ERROR');
-  }
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        throw new PaymentError(`Simulation failed: ${simResult.error}`, 'NETWORK_ERROR');
+      }
 
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-  preparedTx.sign(keypair);
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      preparedTx.sign(keypair);
 
-  let sendResult;
-  try {
-    sendResult = await server.sendTransaction(preparedTx);
-  } catch (err) {
-    throw new PaymentError(`Submit request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
-  }
-  if (sendResult.status === 'ERROR') {
-    throw new PaymentError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
-  }
+      let sendResult;
+      try {
+        sendResult = await server.sendTransaction(preparedTx);
+      } catch (err) {
+        throw new PaymentError(`Submit request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+      if (sendResult.status === 'ERROR') {
+        throw new PaymentError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+      }
 
-  const hash = sendResult.hash;
+      const hash = sendResult.hash;
+      span.setAttribute('stellar.tx_hash', hash);
 
-  let getResult;
-  try {
-    getResult = await server.getTransaction(hash);
-    while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
-      await new Promise((r) => setTimeout(r, 1000));
-      getResult = await server.getTransaction(hash);
+      let getResult;
+      try {
+        getResult = await server.getTransaction(hash);
+        while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+          await new Promise((r) => setTimeout(r, 1000));
+          getResult = await server.getTransaction(hash);
+        }
+      } catch (err) {
+        throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+
+      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw new PaymentError('log_trial_offer transaction failed on-chain', 'NETWORK_ERROR');
+      }
+
+      const success = getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+      const playerTier = success.returnValue
+        ? (scValToNative(success.returnValue) as number)
+        : 3;
+      span.setAttribute('stellar.player_tier', playerTier);
+
+      return {
+        transactionId: hash,
+        playerId,
+        detailsUri,
+        playerTier,
+      };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
     }
-  } catch (err) {
-    throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
-  }
-
-  if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-    throw new PaymentError('log_trial_offer transaction failed on-chain', 'NETWORK_ERROR');
-  }
-
-  const success = getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse;
-  const playerTier = success.returnValue
-    ? (scValToNative(success.returnValue) as number)
-    : 3;
-
-  return {
-    transactionId: hash,
-    playerId,
-    detailsUri,
-    playerTier,
-  };
+  });
 }
 
 // ─── Milestone query ──────────────────────────────────────────────────────────
@@ -341,102 +373,117 @@ export async function purchaseSubscription(
   tier: SubscriptionTier,
   duration: number,
 ): Promise<SubscriptionResult> {
-  if (!scoutWallet) {
-    throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
-  }
+  return tracer.startActiveSpan('stellar.purchaseSubscription', async (span): Promise<SubscriptionResult> => {
+    span.setAttribute('stellar.contract_function', 'subscribe');
+    span.setAttribute('stellar.tier', tier);
+    try {
+      if (!scoutWallet) {
+        throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
+      }
 
-  const { getPlatformKeypair } = await import('../utils/signer');
-  const keypair = getPlatformKeypair();
+      const { getPlatformKeypair } = await import('../utils/signer');
+      const keypair = getPlatformKeypair();
 
-  let account;
-  try {
-    account = await server.getAccount(keypair.publicKey());
-  } catch (err) {
-    throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
-  }
+      let account;
+      try {
+        account = await server.getAccount(keypair.publicKey());
+      } catch (err) {
+        throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
 
-  const contract = new Contract(config.contractId);
+      const contract = new Contract(config.contractId);
 
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: networkPassphrase(),
-  })
-    .addOperation(
-      contract.call(
-        'subscribe',
-        Address.fromString(scoutWallet).toScVal(),
-        nativeToScVal(tier, { type: 'string' }),
-        nativeToScVal(duration, { type: 'u32' }),
-      ),
-    )
-    .setTimeout(30)
-    .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: networkPassphrase(),
+      })
+        .addOperation(
+          contract.call(
+            'subscribe',
+            Address.fromString(scoutWallet).toScVal(),
+            nativeToScVal(tier, { type: 'string' }),
+            nativeToScVal(duration, { type: 'u32' }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-  let simResult;
-  try {
-    simResult = await server.simulateTransaction(tx);
-  } catch (err) {
-    throw new PaymentError(`Simulation request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
-  }
+      let simResult;
+      try {
+        simResult = await server.simulateTransaction(tx);
+      } catch (err) {
+        throw new PaymentError(`Simulation request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
 
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    const errMsg = simResult.error ?? '';
-    if (isInsufficientFeeError(errMsg)) {
-      throw new PaymentError('Insufficient funds for subscription', 'INSUFFICIENT_FUNDS');
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        const errMsg = simResult.error ?? '';
+        if (isInsufficientFeeError(errMsg)) {
+          throw new PaymentError('Insufficient funds for subscription', 'INSUFFICIENT_FUNDS');
+        }
+        throw new PaymentError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+      }
+
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      preparedTx.sign(keypair);
+
+      let sendResult;
+      try {
+        sendResult = await server.sendTransaction(preparedTx);
+      } catch (err) {
+        throw new PaymentError(`Submit request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+      if (sendResult.status === 'ERROR') {
+        const errMsg = String(sendResult.errorResult ?? '');
+        if (isInsufficientFeeError(errMsg)) {
+          throw new PaymentError('Insufficient funds for subscription', 'INSUFFICIENT_FUNDS');
+        }
+        throw new PaymentError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+      }
+
+      const hash = sendResult.hash;
+      span.setAttribute('stellar.tx_hash', hash);
+
+      let getResult;
+      try {
+        getResult = await server.getTransaction(hash);
+        while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+          await new Promise((r) => setTimeout(r, 1000));
+          getResult = await server.getTransaction(hash);
+        }
+      } catch (err) {
+        throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+
+      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
+        if (isInsufficientFeeError(resultMeta)) {
+          throw new PaymentError('Insufficient funds for subscription', 'INSUFFICIENT_FUNDS');
+        }
+        throw new PaymentError('subscribe transaction failed on-chain', 'NETWORK_ERROR');
+      }
+
+      const success = getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+      if (!success.returnValue) {
+        throw new PaymentError('subscribe transaction returned no expiry value', 'NETWORK_ERROR');
+      }
+      const expiresAt = scValToNative(success.returnValue) as number;
+      span.setAttribute('stellar.expires_at', expiresAt);
+
+      return {
+        transactionId: hash,
+        tier,
+        expiresAt,
+        status: 'active',
+      };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
     }
-    throw new PaymentError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
-  }
-
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-  preparedTx.sign(keypair);
-
-  let sendResult;
-  try {
-    sendResult = await server.sendTransaction(preparedTx);
-  } catch (err) {
-    throw new PaymentError(`Submit request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
-  }
-  if (sendResult.status === 'ERROR') {
-    const errMsg = String(sendResult.errorResult ?? '');
-    if (isInsufficientFeeError(errMsg)) {
-      throw new PaymentError('Insufficient funds for subscription', 'INSUFFICIENT_FUNDS');
-    }
-    throw new PaymentError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
-  }
-
-  const hash = sendResult.hash;
-
-  let getResult;
-  try {
-    getResult = await server.getTransaction(hash);
-    while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
-      await new Promise((r) => setTimeout(r, 1000));
-      getResult = await server.getTransaction(hash);
-    }
-  } catch (err) {
-    throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
-  }
-
-  if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-    const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
-    if (isInsufficientFeeError(resultMeta)) {
-      throw new PaymentError('Insufficient funds for subscription', 'INSUFFICIENT_FUNDS');
-    }
-    throw new PaymentError('subscribe transaction failed on-chain', 'NETWORK_ERROR');
-  }
-
-  const success = getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse;
-  if (!success.returnValue) {
-    throw new PaymentError('subscribe transaction returned no expiry value', 'NETWORK_ERROR');
-  }
-  const expiresAt = scValToNative(success.returnValue) as number;
-
-  return {
-    transactionId: hash,
-    tier,
-    expiresAt,
-    status: 'active',
-  };
+  });
 }
 
 /**
@@ -502,72 +549,85 @@ export class SubscriptionError extends Error {
 export async function cancelSubscriptionOnChain(
   scoutWallet: string,
 ): Promise<{ transactionId: string }> {
-  if (!scoutWallet) {
-    throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
-  }
+  return tracer.startActiveSpan('stellar.cancelSubscriptionOnChain', async (span) => {
+    span.setAttribute('stellar.contract_function', 'cancel_subscription');
+    try {
+      if (!scoutWallet) {
+        throw new PaymentError('Missing scoutWallet', 'INVALID_ACCOUNT');
+      }
 
-  const { getPlatformKeypair } = await import('../utils/signer');
-  const keypair = getPlatformKeypair();
+      const { getPlatformKeypair } = await import('../utils/signer');
+      const keypair = getPlatformKeypair();
 
-  const account = await server.getAccount(keypair.publicKey());
-  const contract = new Contract(config.contractId);
+      const account = await server.getAccount(keypair.publicKey());
+      const contract = new Contract(config.contractId);
 
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: networkPassphrase(),
-  })
-    .addOperation(
-      contract.call('cancel_subscription', Address.fromString(scoutWallet).toScVal()),
-    )
-    .setTimeout(30)
-    .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: networkPassphrase(),
+      })
+        .addOperation(
+          contract.call('cancel_subscription', Address.fromString(scoutWallet).toScVal()),
+        )
+        .setTimeout(30)
+        .build();
 
-  const simResult = await server.simulateTransaction(tx);
+      const simResult = await server.simulateTransaction(tx);
 
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    const errMsg = simResult.error ?? '';
-    // Contract error #8 = NotSubscribed
-    if (errMsg.includes('#8') || /not.?subscribed/i.test(errMsg)) {
-      throw new SubscriptionError('Scout has no active on-chain subscription', 'NOT_SUBSCRIBED');
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        const errMsg = simResult.error ?? '';
+        // Contract error #8 = NotSubscribed
+        if (errMsg.includes('#8') || /not.?subscribed/i.test(errMsg)) {
+          throw new SubscriptionError('Scout has no active on-chain subscription', 'NOT_SUBSCRIBED');
+        }
+        // Contract error #9 = Unauthorized
+        if (errMsg.includes('#9') || /unauthorized/i.test(errMsg)) {
+          throw new SubscriptionError('Unauthorized: wallet is not allowed to cancel this subscription', 'UNAUTHORIZED');
+        }
+        throw new PaymentError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+      }
+
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      preparedTx.sign(keypair);
+
+      const sendResult = await server.sendTransaction(preparedTx);
+      if (sendResult.status === 'ERROR') {
+        throw new PaymentError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+      }
+
+      const hash = sendResult.hash;
+      span.setAttribute('stellar.tx_hash', hash);
+
+      let getResult = await server.getTransaction(hash);
+      while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+        await new Promise((r) => setTimeout(r, 1000));
+        getResult = await server.getTransaction(hash);
+      }
+
+      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        // Inspect the result XDR for contract-level error codes.
+        // Cast through unknown because GetFailedTransactionResponse and
+        // GetSuccessfulTransactionResponse share no overlapping status type.
+        const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
+        if (resultMeta.includes('#8') || /not.?subscribed/i.test(resultMeta)) {
+          throw new SubscriptionError('Scout has no active on-chain subscription', 'NOT_SUBSCRIBED');
+        }
+        if (resultMeta.includes('#9') || /unauthorized/i.test(resultMeta)) {
+          throw new SubscriptionError('Unauthorized: wallet is not allowed to cancel this subscription', 'UNAUTHORIZED');
+        }
+        throw new PaymentError('cancel_subscription transaction failed on-chain', 'NETWORK_ERROR');
+      }
+
+      return { transactionId: hash };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
     }
-    // Contract error #9 = Unauthorized
-    if (errMsg.includes('#9') || /unauthorized/i.test(errMsg)) {
-      throw new SubscriptionError('Unauthorized: wallet is not allowed to cancel this subscription', 'UNAUTHORIZED');
-    }
-    throw new PaymentError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
-  }
-
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-  preparedTx.sign(keypair);
-
-  const sendResult = await server.sendTransaction(preparedTx);
-  if (sendResult.status === 'ERROR') {
-    throw new PaymentError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
-  }
-
-  const hash = sendResult.hash;
-
-  let getResult = await server.getTransaction(hash);
-  while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
-    await new Promise((r) => setTimeout(r, 1000));
-    getResult = await server.getTransaction(hash);
-  }
-
-  if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-    // Inspect the result XDR for contract-level error codes.
-    // Cast through unknown because GetFailedTransactionResponse and
-    // GetSuccessfulTransactionResponse share no overlapping status type.
-    const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
-    if (resultMeta.includes('#8') || /not.?subscribed/i.test(resultMeta)) {
-      throw new SubscriptionError('Scout has no active on-chain subscription', 'NOT_SUBSCRIBED');
-    }
-    if (resultMeta.includes('#9') || /unauthorized/i.test(resultMeta)) {
-      throw new SubscriptionError('Unauthorized: wallet is not allowed to cancel this subscription', 'UNAUTHORIZED');
-    }
-    throw new PaymentError('cancel_subscription transaction failed on-chain', 'NETWORK_ERROR');
-  }
-
-  return { transactionId: hash };
+  });
 }
 
 export interface ContractActionResult {
@@ -591,50 +651,63 @@ export class ContractActionError extends Error {
  * indicates the contract is not currently paused (Soroban error code 10).
  */
 export async function unpauseContractOnChain(): Promise<ContractActionResult> {
-  const { getPlatformKeypair } = await import('../utils/signer');
-  const keypair = getPlatformKeypair();
+  return tracer.startActiveSpan('stellar.unpauseContractOnChain', async (span) => {
+    span.setAttribute('stellar.contract_function', 'unpause');
+    try {
+      const { getPlatformKeypair } = await import('../utils/signer');
+      const keypair = getPlatformKeypair();
 
-  const account = await server.getAccount(keypair.publicKey());
-  const contract = new Contract(config.contractId);
+      const account = await server.getAccount(keypair.publicKey());
+      const contract = new Contract(config.contractId);
 
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: networkPassphrase(),
-  })
-    .addOperation(contract.call('unpause'))
-    .setTimeout(30)
-    .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: networkPassphrase(),
+      })
+        .addOperation(contract.call('unpause'))
+        .setTimeout(30)
+        .build();
 
-  const simResult = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    const errMsg = simResult.error ?? '';
-    if (errMsg.includes('ContractPaused') || errMsg.includes('contract_paused') || errMsg.includes('#10')) {
-      throw new ContractActionError('Contract is not currently paused', 'CONTRACT_NOT_PAUSED');
+      const simResult = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        const errMsg = simResult.error ?? '';
+        if (errMsg.includes('ContractPaused') || errMsg.includes('contract_paused') || errMsg.includes('#10')) {
+          throw new ContractActionError('Contract is not currently paused', 'CONTRACT_NOT_PAUSED');
+        }
+        throw new ContractActionError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+      }
+
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      preparedTx.sign(keypair);
+
+      const sendResult = await server.sendTransaction(preparedTx);
+      if (sendResult.status === 'ERROR') {
+        throw new ContractActionError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+      }
+
+      const hash = sendResult.hash;
+      span.setAttribute('stellar.tx_hash', hash);
+
+      let getResult = await server.getTransaction(hash);
+      while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+        await new Promise((r) => setTimeout(r, 1000));
+        getResult = await server.getTransaction(hash);
+      }
+
+      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw new ContractActionError('Transaction failed on-chain', 'NETWORK_ERROR');
+      }
+
+      return { transactionId: hash };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
     }
-    throw new ContractActionError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
-  }
-
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-  preparedTx.sign(keypair);
-
-  const sendResult = await server.sendTransaction(preparedTx);
-  if (sendResult.status === 'ERROR') {
-    throw new ContractActionError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
-  }
-
-  const hash = sendResult.hash;
-
-  let getResult = await server.getTransaction(hash);
-  while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
-    await new Promise((r) => setTimeout(r, 1000));
-    getResult = await server.getTransaction(hash);
-  }
-
-  if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-    throw new ContractActionError('Transaction failed on-chain', 'NETWORK_ERROR');
-  }
-
-  return { transactionId: hash };
+  });
 }
 
 export interface UpdateProfileResult {
