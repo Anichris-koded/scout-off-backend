@@ -1,16 +1,50 @@
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 import { logger } from '../../src/utils/logger';
 import app from '../../src/app';
 import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
+import { auditStore } from '../../src/utils/audit';
 
 jest.mock('../../src/services/ipfs', () => ({
   pinJson: jest.fn().mockResolvedValue('QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64'),
   checkHealth: jest.fn().mockResolvedValue(undefined),
   gatewayUrl: jest.fn((cid) => `https://gateway.pinata.cloud/ipfs/${cid}`),
+  gatewayUrls: jest.fn((cid) => [`https://gateway.pinata.cloud/ipfs/${cid}`]),
+}));
+
+jest.mock('../../src/db', () => ({
+  getEvents: jest.fn().mockReturnValue([]),
+  queryPlayers: jest.fn().mockReturnValue([]),
+  countPlayers: jest.fn().mockReturnValue(0),
+  getPlayerById: jest.fn().mockImplementation((id) => {
+    if (id === 'player_123') {
+      return {
+        player_id: 'player_123',
+        wallet: 'G' + 'A'.repeat(55),
+        position: 'striker',
+        region: 'europe',
+        metadata_uri: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+        progress_level: 1,
+        created_at: 1700000000,
+        is_active: 1,
+      };
+    }
+    return null;
+  }),
+  getEventsCount: jest.fn().mockReturnValue(0),
+  insertPlayerProfileHistory: jest.fn(),
+  getPlayerProfileHistory: jest.fn().mockReturnValue([]),
+  getLatestSubscription: jest.fn().mockReturnValue(null),
+  insertSubscription: jest.fn().mockReturnValue(1),
+  renewSubscription: jest.fn(),
+  cancelSubscription: jest.fn(),
+  getPendingMilestones: jest.fn().mockReturnValue({ data: [], total: 0 }),
+  upsertPlayer: jest.fn(),
 }));
 
 jest.mock('../../src/services/indexer', () => ({
-  getEvents: jest.fn().mockReturnValue([]),
+  indexEvents: jest.fn(),
+  normalizeEventId: jest.fn(),
 }));
 
 jest.mock('../../src/services/webhooks', () => ({
@@ -51,16 +85,37 @@ describe('GET /api/players', () => {
 });
 
 describe('POST /api/players/register', () => {
+  const PLAYER_WALLET = 'G'.repeat(56);
   const validPlayer = {
-    wallet: 'G'.repeat(56),
+    wallet: PLAYER_WALLET,
     position: 'striker',
     region: 'europe',
     metadataUri: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
   };
 
-  it('rejects invalid metadataUri values with 400', async () => {
+  it('returns 401 when no token is provided', async () => {
     const res = await request(app)
       .post('/api/players/register')
+      .send(validPlayer);
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('returns 403 when authenticated as non-player role', async () => {
+    const token = await getValidatorToken();
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send(validPlayer);
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('rejects invalid metadataUri values with 400', async () => {
+    const token = await getPlayerToken();
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
       .send({ ...validPlayer, metadataUri: 'invalid-cid' });
 
     expect(res.status).toBe(400);
@@ -68,13 +123,89 @@ describe('POST /api/players/register', () => {
   });
 
   it('accepts registration payloads with valid metadataUri', async () => {
+    // registerPlayer requires body.wallet === req.account, so the token must
+    // be signed for PLAYER_WALLET specifically (getPlayerToken() signs for a
+    // fresh random keypair each call, which would never match).
+    const token = jwt.sign(
+      { sub: PLAYER_WALLET, role: 'player' },
+      process.env.JWT_SECRET ?? 'test-secret',
+      { expiresIn: '1h' },
+    );
     const res = await request(app)
       .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
       .send(validPlayer);
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
     expect(res.body.data.metadataUri).toBe(validPlayer.metadataUri);
+  });
+
+  it('returns 403 when req.body.wallet does not match authenticated account', async () => {
+    // Token belongs to a different wallet
+    const token = await getPlayerToken();
+    const res = await request(app)
+      .post('/api/players/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send(validPlayer);
+
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/wallet must match authenticated account/i);
+  });
+
+  it('returns 401 when no token is provided', async () => {
+    const res = await request(app)
+      .post('/api/players/register')
+      .send(validPlayer);
+
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('GET /api/players/:playerId route validation', () => {
+  it('accepts a valid player ID and returns 404 when the player does not exist', async () => {
+    const res = await request(app).get('/api/players/player_non_existent');
+    expect(res.status).toBe(404);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('rejects an empty player ID with 400', async () => {
+    const res = await request(app).get('/api/players/%20');
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('playerId may only contain letters, numbers, underscores, and hyphens');
+  });
+
+  it('rejects an overlong player ID with 400', async () => {
+    const longId = 'a'.repeat(129);
+    const res = await request(app).get(`/api/players/${longId}`);
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('playerId cannot exceed 128 characters');
+  });
+
+  it('rejects a player ID with invalid characters', async () => {
+    const res = await request(app).get('/api/players/player%20with%20spaces');
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('playerId may only contain letters, numbers, underscores, and hyphens');
+  });
+});
+
+describe('GET /api/players/:playerId/milestones route validation', () => {
+  it('accepts a valid player ID and returns 200 with array data', async () => {
+    const res = await request(app).get('/api/players/player_123/milestones');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('rejects an invalid player ID with 400', async () => {
+    const res = await request(app).get('/api/players/player%23123/milestones');
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('playerId may only contain letters, numbers, underscores, and hyphens');
   });
 });
 
@@ -193,6 +324,7 @@ async function getPlayerToken(): Promise<string> {
     .send({ transaction: tx.toXDR(), role: 'player' });
   return tokenRes.body.token;
 }
+
 
 async function getAdminToken(): Promise<string> {
   const kp = Keypair.random();
@@ -327,5 +459,37 @@ describe('POST /api/validators/milestone', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ playerId: 'player-1', milestoneType: 'identity' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/players — search audit logging', () => {
+  beforeEach(() => {
+    auditStore.length = 0;
+  });
+
+  it('records an anonymous player_search entry when no auth token is provided', async () => {
+    await request(app).get('/api/players?region=europe');
+    const entry = auditStore.find((e) => e.eventType === 'player_search');
+    expect(entry).toBeDefined();
+    expect(entry!.actorWallet).toBe('anonymous');
+    expect(entry!.eventType).toBe('player_search');
+  });
+
+  it('records a player_search entry linked to the wallet when authenticated', async () => {
+    const scoutWallet = 'GSCOUTABC123XYZWALLET000000000000000000000000000000000000';
+    const token = jwt.sign({ sub: scoutWallet, role: 'scout' }, 'test-secret', { expiresIn: '1h' });
+    await request(app)
+      .get('/api/players?position=striker')
+      .set('Authorization', `Bearer ${token}`);
+    const entry = auditStore.find((e) => e.eventType === 'player_search');
+    expect(entry).toBeDefined();
+    expect(entry!.actorWallet).toBe(scoutWallet);
+  });
+
+  it('still returns 200 and results regardless of auth state', async () => {
+    const res = await request(app).get('/api/players');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
   });
 });

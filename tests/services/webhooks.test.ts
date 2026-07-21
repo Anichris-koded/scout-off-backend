@@ -11,6 +11,7 @@ describe('postWebhookWithRetry', () => {
   });
 
   it('returns successfully when the first request succeeds', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockedFetch.mockResolvedValue({ ok: true, status: 200 } as any);
 
     await expect(postWebhookWithRetry('https://example.com', { eventType: 'test' })).resolves.toBeUndefined();
@@ -19,6 +20,7 @@ describe('postWebhookWithRetry', () => {
 
   it('retries on an initial failure and succeeds on a later attempt', async () => {
     mockedFetch.mockRejectedValueOnce(new Error('network fail'));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockedFetch.mockResolvedValue({ ok: true, status: 200 } as any);
 
     await expect(
