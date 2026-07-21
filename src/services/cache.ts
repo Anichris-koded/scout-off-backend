@@ -8,6 +8,18 @@
  *
  * TODO (Redis): Replace Map with a Redis client for distributed deployments.
  */
+import Redis from 'ioredis';
+import config from '../config';
+import { CacheStore } from './cacheStore';
+import { InMemoryCacheStore } from './inMemoryCacheStore';
+import { RedisCacheStore } from './redisCacheStore';
+
+function createStore(): CacheStore {
+  if (config.redisUrl) {
+    return new RedisCacheStore(new Redis(config.redisUrl));
+  }
+  return new InMemoryCacheStore();
+}
 
 import config from '../config';
 
