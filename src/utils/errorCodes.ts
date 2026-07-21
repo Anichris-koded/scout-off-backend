@@ -15,6 +15,7 @@ export const ErrorCode = {
   VALIDATION_ERROR:      'VALIDATION_ERROR',
   MALFORMED_JSON:        'MALFORMED_JSON',
   PAYLOAD_TOO_LARGE:     'PAYLOAD_TOO_LARGE',
+  UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   UNAUTHORIZED:          'UNAUTHORIZED',
