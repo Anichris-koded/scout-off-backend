@@ -42,7 +42,7 @@ export interface ContactPaymentResult {
 export class PaymentError extends Error {
   constructor(
     message: string,
-    public readonly code: 'INSUFFICIENT_FUNDS' | 'INVALID_ACCOUNT' | 'NETWORK_ERROR' | 'UNKNOWN',
+    public readonly code: 'INSUFFICIENT_FUNDS' | 'INVALID_ACCOUNT' | 'NETWORK_ERROR' | 'MISSING_PLAYER' | 'UNKNOWN',
   ) {
     super(message);
     this.name = 'PaymentError';
@@ -323,23 +323,135 @@ export class FeeWithdrawalError extends Error {
   }
 }
 
+/** Matches the contract's ContractPaused (#10) error in a simulation/result error string. */
+function isContractPausedError(message: string): boolean {
+  return /#10\b/.test(message) || /contract.?paused/i.test(message);
+}
+
 /**
- * Stub: invoke the contract's `withdraw_fees(recipient: Address) -> u128` method.
- * Returns the withdrawn amount and transaction metadata.
- * Throws FeeWithdrawalError with code 'NO_FEES' when balance is zero.
+ * Invoke `withdraw_fees(recipient: Address) -> u128` on the Soroban contract
+ * via the platform keypair.
+ *
+ * Flow mirrors pauseContractOnChain() / cancelSubscriptionOnChain():
+ *   getAccount → build tx → simulateTransaction → assembleTransaction
+ *   → sign → sendTransaction → poll getTransaction until final status.
+ *
+ * On success, parses the confirmed transaction's u128 return value and
+ * throws FeeWithdrawalError('No fees available', 'NO_FEES') if it is zero
+ * rather than returning a zero-amount result. Throws
+ * FeeWithdrawalError(..., 'CONTRACT_PAUSED') if the contract's paused-state
+ * guard (error #10) rejects the call, and (..., 'NETWORK_ERROR') for any
+ * RPC/transport failure.
  */
 export async function withdrawFees(recipient: string): Promise<FeeWithdrawalResult> {
-  if (!recipient) {
-    throw new FeeWithdrawalError('Missing recipient', 'INVALID_RECIPIENT');
-  }
-  // TODO: build and submit withdraw_fees Soroban transaction
-  // Example (pseudocode):
-  //   const tx = await buildInvokeContractTx('withdraw_fees', [Address.fromString(recipient)]);
-  //   const result = await server.sendTransaction(tx);
-  //   const amount = parseU128FromXdr(result.returnValue);
-  //   if (amount === 0n) throw new FeeWithdrawalError('No fees available', 'NO_FEES');
-  //   return { transactionId: result.hash, recipient, amount: amount.toString(), token: 'XLM' };
-  throw new FeeWithdrawalError('No fees available to withdraw', 'NO_FEES');
+  return tracer.startActiveSpan('stellar.withdrawFees', async (span) => {
+    span.setAttribute('stellar.contract_function', 'withdraw_fees');
+    try {
+      if (!recipient) {
+        throw new FeeWithdrawalError('Missing recipient', 'INVALID_RECIPIENT');
+      }
+
+      const { getPlatformKeypair } = await import('../utils/signer');
+      const keypair = getPlatformKeypair();
+
+      let account;
+      try {
+        account = await server.getAccount(keypair.publicKey());
+      } catch (err) {
+        throw new FeeWithdrawalError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+
+      const contract = new Contract(config.contractId);
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: networkPassphrase(),
+      })
+        .addOperation(
+          contract.call('withdraw_fees', Address.fromString(recipient).toScVal()),
+        )
+        .setTimeout(30)
+        .build();
+
+      let simResult;
+      try {
+        simResult = await server.simulateTransaction(tx);
+      } catch (err) {
+        throw new FeeWithdrawalError(`Simulation request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        const errMsg = simResult.error ?? '';
+        if (isContractPausedError(errMsg)) {
+          throw new FeeWithdrawalError('Contract is paused; withdrawal not available', 'CONTRACT_PAUSED');
+        }
+        throw new FeeWithdrawalError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+      }
+
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      preparedTx.sign(keypair);
+
+      let sendResult;
+      try {
+        sendResult = await server.sendTransaction(preparedTx);
+      } catch (err) {
+        throw new FeeWithdrawalError(`Submit request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+      if (sendResult.status === 'ERROR') {
+        const errMsg = String(sendResult.errorResult ?? '');
+        if (isContractPausedError(errMsg)) {
+          throw new FeeWithdrawalError('Contract is paused; withdrawal not available', 'CONTRACT_PAUSED');
+        }
+        throw new FeeWithdrawalError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+      }
+
+      const hash = sendResult.hash;
+      span.setAttribute('stellar.tx_hash', hash);
+
+      let getResult;
+      try {
+        getResult = await server.getTransaction(hash);
+        while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+          await new Promise((r) => setTimeout(r, 1000));
+          getResult = await server.getTransaction(hash);
+        }
+      } catch (err) {
+        throw new FeeWithdrawalError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+
+      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
+        if (isContractPausedError(resultMeta)) {
+          throw new FeeWithdrawalError('Contract is paused; withdrawal not available', 'CONTRACT_PAUSED');
+        }
+        throw new FeeWithdrawalError('withdraw_fees transaction failed on-chain', 'NETWORK_ERROR');
+      }
+
+      const success = getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+      const amount = success.returnValue
+        ? (scValToNative(success.returnValue) as bigint)
+        : 0n;
+      span.setAttribute('stellar.fee_amount', amount.toString());
+
+      if (amount === 0n) {
+        throw new FeeWithdrawalError('No fees available to withdraw', 'NO_FEES');
+      }
+
+      return {
+        transactionId: hash,
+        recipient,
+        amount: amount.toString(),
+        token: 'XLM',
+      };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 export type SubscriptionTier = 'basic' | 'premium';
@@ -710,23 +822,29 @@ export async function unpauseContractOnChain(): Promise<ContractActionResult> {
   });
 }
 
-// ─── Validator revocation ─────────────────────────────────────────────────────
+// ─── Validator registration ───────────────────────────────────────────────────
 
-export interface RevokeValidatorResult {
+export interface RegisterValidatorResult {
   transactionId: string;
 }
 
 export type ValidatorActionErrorCode =
+  | 'ALREADY_REGISTERED'
+  // 'ALREADY_REVOKED' / 'NOT_REGISTERED' belong to revokeValidatorOnChain's
+  // half of this same error type (see adminController.ts's revokeValidator
+  // handler) — included here so ValidatorActionError stays a single shared
+  // type across both validator admin actions rather than forking per-action
+  // error classes.
   | 'ALREADY_REVOKED'
   | 'NOT_REGISTERED'
   | 'UNAUTHORIZED'
   | 'NETWORK_ERROR';
 
 /**
- * Thrown when a revoke_validator contract call cannot proceed due to a known
- * on-chain state (already revoked / never registered / caller not
- * authorized) or fails for network/transport reasons. Known-state codes map
- * to 4xx HTTP responses in the controller; NETWORK_ERROR maps to 5xx.
+ * Thrown when a validator admin action (register/revoke) contract call
+ * cannot proceed due to a known on-chain state, or fails for network/
+ * transport reasons. Known-state codes map to 4xx HTTP responses in the
+ * controller; NETWORK_ERROR maps to 5xx.
  */
 export class ValidatorActionError extends Error {
   constructor(
@@ -739,8 +857,8 @@ export class ValidatorActionError extends Error {
 }
 
 /**
- * Invoke `revoke_validator(validator: Address)` on the Soroban contract via
- * the platform keypair.
+ * Invoke `register_validator(validator: Address)` on the Soroban contract
+ * via the platform keypair.
  *
  * Flow mirrors unpauseContractOnChain() / cancelSubscriptionOnChain():
  *   getAccount → build tx → simulateTransaction → assembleTransaction
@@ -748,21 +866,21 @@ export class ValidatorActionError extends Error {
  *
  * On success returns the confirmed transaction hash.
  *
- * NOTE on error codes: the exact Soroban error codes the register contract
- * returns for "already revoked" / "not a registered validator" have not been
- * confirmed against the deployed contract source at the time of writing.
- * The string matching below is best-effort — mirroring the #8/#9 pattern
- * cancelSubscriptionOnChain() uses for the subscription contract — and
- * should be tightened once the register contract's actual error enum is
- * available. Any simulation/submission/poll failure that doesn't match a
- * known pattern falls through to a generic NETWORK_ERROR rather than
- * crashing, so callers always get a typed error to branch on.
+ * NOTE on error codes: the contract's register_validator call is currently
+ * idempotent (re-registering an already-registered wallet succeeds
+ * silently), so ALREADY_REGISTERED is unlikely to surface today. The
+ * string matching below is best-effort — mirroring the #8/#9 pattern
+ * cancelSubscriptionOnChain() uses for the subscription contract — so
+ * callers still get a typed error to branch on if the contract's error
+ * enum grows a dedicated code for this case later. Any simulation/
+ * submission/poll failure that doesn't match a known pattern falls
+ * through to a generic NETWORK_ERROR rather than crashing.
  */
-export async function revokeValidatorOnChain(
+export async function registerValidatorOnChain(
   validatorWallet: string,
-): Promise<RevokeValidatorResult> {
-  return tracer.startActiveSpan('stellar.revokeValidatorOnChain', async (span) => {
-    span.setAttribute('stellar.contract_function', 'revoke_validator');
+): Promise<RegisterValidatorResult> {
+  return tracer.startActiveSpan('stellar.registerValidatorOnChain', async (span) => {
+    span.setAttribute('stellar.contract_function', 'register_validator');
     try {
       if (!validatorWallet) {
         throw new PaymentError('Missing validatorWallet', 'INVALID_ACCOUNT');
@@ -779,7 +897,7 @@ export async function revokeValidatorOnChain(
         networkPassphrase: networkPassphrase(),
       })
         .addOperation(
-          contract.call('revoke_validator', Address.fromString(validatorWallet).toScVal()),
+          contract.call('register_validator', Address.fromString(validatorWallet).toScVal()),
         )
         .setTimeout(30)
         .build();
@@ -789,14 +907,11 @@ export async function revokeValidatorOnChain(
       if (SorobanRpc.Api.isSimulationError(simResult)) {
         const errMsg = simResult.error ?? '';
         // Best-effort contract error mapping — see NOTE above.
-        if (errMsg.includes('#12') || /already.?revoked/i.test(errMsg)) {
-          throw new ValidatorActionError('Validator is already revoked on-chain', 'ALREADY_REVOKED');
-        }
-        if (errMsg.includes('#11') || /not.?(a )?registered/i.test(errMsg)) {
-          throw new ValidatorActionError('Wallet is not a registered validator', 'NOT_REGISTERED');
+        if (errMsg.includes('#13') || /already.?registered/i.test(errMsg)) {
+          throw new ValidatorActionError('Validator is already registered on-chain', 'ALREADY_REGISTERED');
         }
         if (/unauthorized/i.test(errMsg)) {
-          throw new ValidatorActionError('Unauthorized: platform account cannot revoke this validator', 'UNAUTHORIZED');
+          throw new ValidatorActionError('Unauthorized: platform account cannot register this validator', 'UNAUTHORIZED');
         }
         throw new ValidatorActionError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
       }
@@ -823,13 +938,10 @@ export async function revokeValidatorOnChain(
         // Cast through unknown because GetFailedTransactionResponse and
         // GetSuccessfulTransactionResponse share no overlapping status type.
         const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
-        if (resultMeta.includes('#12') || /already.?revoked/i.test(resultMeta)) {
-          throw new ValidatorActionError('Validator is already revoked on-chain', 'ALREADY_REVOKED');
+        if (resultMeta.includes('#13') || /already.?registered/i.test(resultMeta)) {
+          throw new ValidatorActionError('Validator is already registered on-chain', 'ALREADY_REGISTERED');
         }
-        if (resultMeta.includes('#11') || /not.?(a )?registered/i.test(resultMeta)) {
-          throw new ValidatorActionError('Wallet is not a registered validator', 'NOT_REGISTERED');
-        }
-        throw new ValidatorActionError('revoke_validator transaction failed on-chain', 'NETWORK_ERROR');
+        throw new ValidatorActionError('register_validator transaction failed on-chain', 'NETWORK_ERROR');
       }
 
       return { transactionId: hash };
@@ -939,28 +1051,108 @@ export async function updateProfile(
 }
 
 /**
- * Stub: query verified milestones for a player from the Soroban contract.
+ * Parse the native JS value produced by `scValToNative()` on a
+ * `get_milestones` return value (a `Vec<Milestone>`) into `OnChainMilestone[]`.
  *
- * Expected contract call: `get_milestones(player_id: String) -> Vec<Milestone>`
- * The contract returns a tamper-proof list of all milestones (pending and
- * approved) associated with the given player. Each entry includes the
- * milestone type, evidence CID, and the validator that approved it.
+ * The contract's Milestone struct fields are snake_case; tolerate a
+ * camelCase shape too so this keeps working if a future SDK version (or a
+ * differently-configured client) normalizes field casing during XDR
+ * decoding. The contract struct does not carry its own milestone id, so one
+ * is synthesized from the entry's position in the returned vector.
+ */
+export function parseMilestonesFromNative(playerId: string, native: unknown): OnChainMilestone[] {
+  if (!Array.isArray(native)) {
+    return [];
+  }
+  return native.map((entry, index) => {
+    const rec = (entry ?? {}) as Record<string, unknown>;
+    const approved = Boolean(rec.approved);
+    const submittedAt = rec.submitted_at ?? rec.submittedAt ?? rec.ledger;
+    return {
+      milestoneId: String(rec.milestone_id ?? rec.milestoneId ?? index),
+      playerId: String(rec.player_id ?? rec.playerId ?? playerId),
+      milestoneType: String(rec.milestone_type ?? rec.milestoneType ?? ''),
+      evidenceUri: String(rec.evidence_uri ?? rec.evidenceUri ?? ''),
+      approved,
+      approvedBy: approved ? String(rec.validator ?? rec.approvedBy ?? '') : null,
+      ledger: submittedAt != null ? Number(submittedAt) : null,
+    };
+  });
+}
+
+/** Matches the contract's PlayerNotFound (#3) error in a simulation error string. */
+function isPlayerNotFoundError(message: string): boolean {
+  return /#3\b/.test(message) || /player.?not.?found/i.test(message);
+}
+
+/**
+ * Query verified milestones for a player by invoking
+ * `get_milestones(player_id) -> Vec<Milestone>` on the Soroban contract via
+ * simulateTransaction. Read-only — no transaction is signed or submitted.
  *
- * Replace the stub body with a real Soroban `simulateTransaction` /
- * `invokeContractFunction` call when the RPC integration is ready.
- *
- * @param playerId - The on-chain player identifier (Stellar account or UUID).
- * @returns Array of on-chain milestones. Returns an empty array until wired.
+ * Returns a tamper-proof list of all milestones (pending and approved)
+ * associated with the given player, or an empty array if the player has
+ * none. Throws PaymentError('MISSING_PLAYER') if the contract simulation
+ * reports the player id is unknown.
  */
 export async function queryMilestones(playerId: string): Promise<OnChainMilestone[]> {
-  if (!playerId) {
-    throw new PaymentError('Missing playerId', 'INVALID_ACCOUNT');
-  }
-  // TODO: invoke get_milestones on the Soroban contract via SorobanRpc.Server
-  // Example (pseudocode):
-  //   const result = await server.simulateTransaction(
-  //     buildInvokeContractTx('get_milestones', [playerId])
-  //   );
-  //   return parseMilestonesFromXdr(result);
-  return [];
+  return tracer.startActiveSpan('stellar.queryMilestones', async (span) => {
+    span.setAttribute('stellar.contract_function', 'get_milestones');
+    try {
+      if (!playerId) {
+        throw new PaymentError('Missing playerId', 'INVALID_ACCOUNT');
+      }
+
+      try {
+        const contract = new Contract(config.contractId);
+        // Use a random ephemeral keypair as the simulation source — no on-chain
+        // auth is required for this view-only call, and we never submit the tx.
+        const ephemeral = Keypair.random();
+        const sourceAccount = new Account(ephemeral.publicKey(), '0');
+
+        const tx = new TransactionBuilder(sourceAccount, {
+          fee: BASE_FEE,
+          networkPassphrase: networkPassphrase(),
+        })
+          .addOperation(
+            contract.call('get_milestones', nativeToScVal(playerId, { type: 'string' })),
+          )
+          .setTimeout(30)
+          .build();
+
+        const simResult = await server.simulateTransaction(tx);
+
+        if (SorobanRpc.Api.isSimulationError(simResult)) {
+          const errMsg = simResult.error ?? '';
+          if (isPlayerNotFoundError(errMsg)) {
+            throw new PaymentError('Player not found on-chain', 'MISSING_PLAYER');
+          }
+          throw new PaymentError(`Contract simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+        }
+
+        const successSim = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+        const retval = successSim.result?.retval;
+        if (!retval) {
+          return [];
+        }
+
+        const milestones = parseMilestonesFromNative(playerId, scValToNative(retval));
+        span.setAttribute('stellar.milestone_count', milestones.length);
+        return milestones;
+      } catch (err) {
+        if (err instanceof PaymentError) throw err;
+        throw new PaymentError(
+          `RPC call failed: ${(err as Error).message}`,
+          'NETWORK_ERROR',
+        );
+      }
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }

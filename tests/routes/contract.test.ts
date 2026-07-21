@@ -97,6 +97,7 @@ jest.mock('../../src/services/stellar', () => ({
   stellarHealth: jest.fn().mockResolvedValue(true),
   pauseContractOnChain: jest.fn().mockResolvedValue({ transactionId: 'real-pause-txid-abc123' }),
   unpauseContractOnChain: jest.fn().mockResolvedValue({ transactionId: 'real-unpause-txid-abc123' }),
+  registerValidatorOnChain: jest.fn().mockResolvedValue({ transactionId: 'real-register-txid-abc123' }),
   revokeValidatorOnChain: jest.fn().mockResolvedValue({ transactionId: 'real-revoke-txid-abc123' }),
   ContractActionError: class ContractActionError extends Error {
     constructor(message: string, public readonly code: string) {
@@ -487,7 +488,7 @@ describe('POST /api/admin/fees — envelope shape', () => {
 });
 
 describe('POST /api/admin/validators/register — envelope shape', () => {
-  it('success: { success: true, message: string }', async () => {
+  it('success: { success: true, message: string, transactionId: string }', async () => {
     const res = await request(app)
       .post('/api/admin/validators/register')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -495,6 +496,7 @@ describe('POST /api/admin/validators/register — envelope shape', () => {
     expect(res.status).toBe(202);
     expect(res.body.success).toBe(true);
     expect(typeof res.body.message).toBe('string');
+    expect(res.body.transactionId).toBe('real-register-txid-abc123');
   });
 
   it('error: { success: false, error: string } for invalid wallet', async () => {
@@ -504,6 +506,30 @@ describe('POST /api/admin/validators/register — envelope shape', () => {
       .send({ validatorWallet: 'INVALID' });
     expect(res.status).toBe(400);
     assertErrorEnvelope(res.body);
+  });
+
+  it('returns 503 and does not insert the local row when the chain call fails', async () => {
+    const { registerValidatorOnChain, ValidatorActionError } = jest.requireMock('../../src/services/stellar') as {
+      registerValidatorOnChain: jest.Mock;
+      ValidatorActionError: new (msg: string, code: string) => Error & { code: string };
+    };
+    const { insertValidator } = jest.requireMock('../../src/services/indexer') as {
+      insertValidator: jest.Mock;
+    };
+    insertValidator.mockClear();
+    registerValidatorOnChain.mockRejectedValueOnce(
+      new ValidatorActionError('Simulation failed: rpc down', 'NETWORK_ERROR'),
+    );
+    const res = await request(app)
+      .post('/api/admin/validators/register')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ validatorWallet: VALIDATOR_WALLET });
+    expect(res.status).toBe(503);
+    expect(res.body.success).toBe(false);
+    assertErrorEnvelope(res.body);
+    expect(insertValidator).not.toHaveBeenCalled();
+    // restore
+    registerValidatorOnChain.mockResolvedValue({ transactionId: 'real-register-txid-abc123' });
   });
 });
 
