@@ -1,5 +1,19 @@
 import { Router } from 'express';
-import { getSubscription, getUnlockedContacts, getContactDetails, unlockContact, getPaymentHistory, subscribe, renewSubscription, cancelSubscription, submitTrialOffer, listTrialOffers, createTrialOffer, trialOfferSchema, unlockContactSchema } from '../controllers/scoutController';
+import {
+  getSubscription,
+  getUnlockedContacts,
+  getContactDetails,
+  unlockContact,
+  getPaymentHistory,
+  subscribe,
+  renewSubscription,
+  cancelSubscription,
+  submitTrialOffer,
+  listTrialOffers,
+  createTrialOffer,
+  trialOfferSchema,
+  unlockContactSchema,
+} from '../controllers/scoutController';
 import { getScoutRecommendations } from '../controllers/scoutRecommendationsController';
 import { putScoutNote, getScoutNoteHandler, listScoutNotesHandler } from '../controllers/scoutNotesController';
 import { issueApiKey, listApiKeys, revokeApiKey } from '../controllers/apiKeyController';
