@@ -81,6 +81,7 @@ import {
   logTrialOffer,
   pauseContractOnChain,
   PaymentError,
+  ValidatorActionError,
 } from '../../src/services/stellar';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-explicit-any
