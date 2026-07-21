@@ -20,10 +20,12 @@ jest.mock('../../src/db', () => ({
   insertPendingPin: jest.fn(),
   getPendingPins: jest.fn().mockReturnValue([]),
   deletePendingPin: jest.fn(),
+  deletePendingPinByHash: jest.fn(),
+  isPendingPinByHash: jest.fn().mockReturnValue(false),
   incrementPendingPinAttempts: jest.fn(),
 }));
 
-import { insertPendingPin } from '../../src/db';
+import { insertPendingPin, deletePendingPinByHash } from '../../src/db';
 
 // Mock logger to capture critical calls
 const mockCritical = jest.fn();
@@ -60,12 +62,12 @@ describe('pinJson IPFS failure handling (#346)', () => {
     );
   });
 
-  it('does not call critical or queue on successful pin', async () => {
+  it('does not call critical or queue retry on successful pin', async () => {
     mockedPost.mockResolvedValue({ data: { IpfsHash: 'QmSuccess' } });
     const cid = await pinJson({ wallet: 'Gok' });
     expect(cid).toBe('QmSuccess');
     expect(mockCritical).not.toHaveBeenCalled();
-    expect(insertPendingPin).not.toHaveBeenCalled();
+    expect(deletePendingPinByHash).toHaveBeenCalled();
   });
 });
 

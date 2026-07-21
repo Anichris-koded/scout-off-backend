@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
 import { getEvents, getEventsCount, getLastLedger, setLastLedger, getValidatorStats, getAuditLogs, getAuditLogsCount } from '../db';
-import { getAllValidators, insertValidator, revokeValidatorRow } from '../services/indexer';
+import { getAllValidators, insertValidator, revokeValidatorRow, getValidatorByWallet } from '../services/indexer';
+import { isValidStellarAddress } from '../utils/stellarAddress';
 import { ApiResponse, EventRecord, ContractEventType } from '../types';
 import { logAuditEvent } from '../services/audit';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, unpauseContractOnChain } from '../services/stellar';
@@ -10,6 +11,7 @@ import { revokeToken } from '../services/tokenBlocklist';
 import config from '../config';
 import { logger } from '../utils/logger';
 import { ErrorCode } from '../utils/errorCodes';
+import { proposeAction, approveAction, listPendingActions, getActionDetails, AdminActionType } from '../services/adminMultiSig';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
@@ -200,23 +202,27 @@ export async function pauseContract(req: Request, res: Response, next: NextFunct
       return;
     }
     // Check threshold for high-value operations
-    if (config.adminThreshold > 1) {
-      // TODO: Implement multi-signature collection and verification
-      res.status(403).json({ success: false, error: 'High-value operation requires multiple admin signatures' });
+    const proposal = proposeAction('pause_contract', {}, adminWallet);
+    if (proposal.status === 'immediate') {
+      logAuditEvent({
+        action: 'contract_state_change',
+        adminWallet,
+        queryParams: {},
+        timestamp: new Date().toISOString(),
+        contractAction: 'pause_contract',
+      });
+      // NOTE: Contract-level pause is simulated. Real invocation will call pause() on the Soroban contract.
+      res.status(202).json({
+        success: true,
+        message: 'Contract pause submitted (simulated)',
+        transactionId: 'stub-pause-txn-placeholder',
+      });
       return;
     }
-    logAuditEvent({
-      action: 'contract_state_change',
-      adminWallet,
-      queryParams: {},
-      timestamp: new Date().toISOString(),
-      contractAction: 'pause_contract',
-    });
-    // NOTE: Contract-level pause is simulated. Real invocation will call pause() on the Soroban contract.
     res.status(202).json({
       success: true,
-      message: 'Contract pause submitted (simulated)',
-      transactionId: 'stub-pause-txn-placeholder',
+      message: `Contract pause proposed, awaiting ${config.adminThreshold - 1} more admin signature(s)`,
+      data: { actionId: proposal.actionId, collectedSignatures: 1, requiredSignatures: config.adminThreshold },
     });
   } catch (err) {
     next(err);
@@ -237,33 +243,37 @@ export async function unpauseContract(req: Request, res: Response, next: NextFun
       return;
     }
     // Check threshold for high-value operations
-    if (config.adminThreshold > 1) {
-      // TODO: Implement multi-signature collection and verification
-      res.status(403).json({ success: false, error: 'High-value operation requires multiple admin signatures' });
+    const proposal = proposeAction('unpause_contract', {}, adminWallet);
+    if (proposal.status === 'immediate') {
+      logAuditEvent({
+        action: 'contract_state_change',
+        adminWallet,
+        queryParams: {},
+        timestamp: new Date().toISOString(),
+        contractAction: 'unpause_contract',
+      });
+
+      const result = await unpauseContractOnChain();
+
+      logAuditEvent({
+        action: 'contract_state_change',
+        adminWallet,
+        queryParams: { transactionId: result.transactionId, outcome: 'success' },
+        timestamp: new Date().toISOString(),
+        contractAction: 'unpause_contract',
+      });
+
+      res.status(202).json({
+        success: true,
+        message: 'Contract unpaused successfully',
+        transactionId: result.transactionId,
+      });
       return;
     }
-    logAuditEvent({
-      action: 'contract_state_change',
-      adminWallet,
-      queryParams: {},
-      timestamp: new Date().toISOString(),
-      contractAction: 'unpause_contract',
-    });
-
-    const result = await unpauseContractOnChain();
-
-    logAuditEvent({
-      action: 'contract_state_change',
-      adminWallet,
-      queryParams: { transactionId: result.transactionId, outcome: 'success' },
-      timestamp: new Date().toISOString(),
-      contractAction: 'unpause_contract',
-    });
-
     res.status(202).json({
       success: true,
-      message: 'Contract unpaused successfully',
-      transactionId: result.transactionId,
+      message: `Contract unpause proposed, awaiting ${config.adminThreshold - 1} more admin signature(s)`,
+      data: { actionId: proposal.actionId, collectedSignatures: 1, requiredSignatures: config.adminThreshold },
     });
   } catch (err) {
     if (err instanceof Error && (err as { code?: string }).code === 'CONTRACT_NOT_PAUSED') {
@@ -380,8 +390,23 @@ export async function withdrawFeesController(req: Request, res: Response, next: 
   }
   // Check threshold for high-value operations
   if (config.adminThreshold > 1) {
-    // TODO: Implement multi-signature collection and verification
-    res.status(403).json({ success: false, error: 'High-value operation requires multiple admin signatures' });
+    const parsed = withdrawFeesSchema.safeParse(req.body);
+    if (!parsed.success) {
+      logAuditEvent({
+        action: 'fee_withdrawal_attempt',
+        adminWallet,
+        queryParams: { error: 'validation_failed', reason: parsed.error.errors[0]?.message },
+        timestamp: new Date().toISOString(),
+      });
+      res.status(400).json({ success: false, error: parsed.error.errors[0]?.message ?? 'Invalid request body', code: ErrorCode.VALIDATION_ERROR });
+      return;
+    }
+    const proposal = proposeAction('withdraw_fees', { recipient: parsed.data.recipient }, adminWallet);
+    res.status(202).json({
+      success: true,
+      message: `Fee withdrawal proposed, awaiting ${config.adminThreshold - 1} more admin signature(s)`,
+      data: { actionId: proposal.actionId, collectedSignatures: 1, requiredSignatures: config.adminThreshold, recipient: parsed.data.recipient },
+    });
     return;
   }
   const parsed = withdrawFeesSchema.safeParse(req.body);
@@ -585,6 +610,328 @@ export async function updatePlatformFee(req: Request, res: Response, next: NextF
       success: true,
       message: `Platform fee update to ${platformFeeBps} bps submitted (simulated)`,
       transactionId: 'stub-platform-fee-txn-placeholder',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/admin/actions/pending
+ * List all pending multi-admin actions (expired ones are purged on read).
+ */
+export async function getPendingActions(req: Request, res: Response, next: NextFunction) {
+  try {
+    const actions = listPendingActions().map((a) => ({
+      id: a.id,
+      actionType: a.action_type,
+      proposer: a.proposer,
+      payload: JSON.parse(a.payload),
+      collectedSignatures: a.collected_signatures,
+      requiredSignatures: a.required_signatures,
+      expiresAt: a.expires_at,
+      createdAt: a.created_at,
+    }));
+    res.json({ success: true, data: actions });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/admin/actions/:id
+ * Get details of a specific pending action including collected signers.
+ */
+export async function getPendingActionById(req: Request, res: Response, next: NextFunction) {
+  try {
+    const details = getActionDetails(req.params.id);
+    if (!details) {
+      res.status(404).json({ success: false, error: 'Action not found', code: ErrorCode.NOT_FOUND });
+      return;
+    }
+    res.json({
+      success: true,
+      data: {
+        id: details.action.id,
+        actionType: details.action.action_type,
+        proposer: details.action.proposer,
+        payload: JSON.parse(details.action.payload),
+        status: details.action.status,
+        collectedSignatures: details.action.collected_signatures,
+        requiredSignatures: details.action.required_signatures,
+        expiresAt: details.action.expires_at,
+        createdAt: details.action.created_at,
+        signers: details.signatures.map((s) => ({ wallet: s.signer, signedAt: s.signed_at })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/admin/actions/:id/approve
+ * Co-sign a pending multi-admin action.
+ */
+export async function approvePendingAction(req: Request, res: Response, next: NextFunction) {
+  try {
+    const adminWallet = req.account ?? 'unknown';
+
+    if (!config.adminWallets.includes(adminWallet)) {
+      res.status(403).json({ success: false, error: 'Insufficient permissions' });
+      return;
+    }
+
+    const result = approveAction(req.params.id, adminWallet);
+
+    if (result.status === 'duplicate') {
+      res.status(409).json({
+        success: false,
+        error: 'Admin has already signed this action',
+        code: ErrorCode.CONFLICT,
+        data: { actionId: result.actionId, collectedSignatures: result.collected, requiredSignatures: result.required },
+      });
+      return;
+    }
+
+    if (result.status === 'approved') {
+      res.status(200).json({
+        success: true,
+        message: 'Approval threshold reached — action executed',
+        data: {
+          actionId: result.actionId,
+          collectedSignatures: result.collected,
+          requiredSignatures: result.required,
+          status: 'executed',
+        },
+      });
+      return;
+    }
+
+    res.status(202).json({
+      success: true,
+      message: `Signature recorded, ${result.required - result.collected} more signature(s) needed`,
+      data: {
+        actionId: result.actionId,
+        collectedSignatures: result.collected,
+        requiredSignatures: result.required,
+        status: 'pending',
+      },
+    });
+  } catch (err) {
+    const error = err as Error & { code?: string; status?: number };
+    if (error.status === 404) {
+      res.status(404).json({ success: false, error: error.message, code: error.code });
+      return;
+    }
+    if (error.status === 410) {
+      res.status(410).json({ success: false, error: error.message, code: error.code });
+      return;
+    }
+    if (error.status === 409) {
+      res.status(409).json({ success: false, error: error.message, code: error.code });
+      return;
+    }
+    if (error.status === 403) {
+      res.status(403).json({ success: false, error: error.message, code: error.code });
+      return;
+    }
+    if (error.status === 400) {
+      res.status(400).json({ success: false, error: error.message, code: error.code });
+      return;
+    }
+    next(err);
+  }
+}
+
+// ─── Validator import types ───────────────────────────────────────────────────
+
+export interface ImportValidatorEntry {
+  wallet: string;
+  label?: string;
+  region?: string;
+}
+
+export type ImportResultStatus = 'registered' | 'duplicate' | 'invalid';
+
+export interface ImportValidatorResult {
+  wallet: string;
+  status: ImportResultStatus;
+  reason?: string;
+  label?: string;
+  region?: string;
+}
+
+/**
+ * Parse a CSV text body into an array of ImportValidatorEntry objects.
+ *
+ * Supported formats:
+ *   - Single-column:  wallet
+ *   - Two-column:     wallet,label
+ *   - Three-column:   wallet,label,region
+ *
+ * Lines beginning with # or empty lines are ignored.
+ * A header row whose first token is the literal "wallet" (case-insensitive)
+ * is silently skipped.
+ */
+export function parseCsvBody(text: string): ImportValidatorEntry[] {
+  const entries: ImportValidatorEntry[] = [];
+  const lines = text.split(/\r?\n/);
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const cols = line.split(',').map((c) => c.trim());
+    // Skip header row
+    if (cols[0].toLowerCase() === 'wallet') continue;
+    const [wallet, label, region] = cols;
+    entries.push({ wallet: wallet ?? '', label: label || undefined, region: region || undefined });
+  }
+  return entries;
+}
+
+/**
+ * Process a batch of ImportValidatorEntry items and return per-entry results.
+ * Delegates registration to the same insertValidator() path used by the single-
+ * registration endpoint so no registration logic is duplicated.
+ *
+ * Duplicate detection:
+ *   - A validator that already exists AND is not revoked → "duplicate"
+ *   - A validator that was previously revoked is re-registered (same as single-
+ *     registration, which also does INSERT OR REPLACE)
+ */
+export function processBatch(
+  entries: ImportValidatorEntry[],
+  adminWallet: string,
+): ImportValidatorResult[] {
+  const results: ImportValidatorResult[] = [];
+  // Track wallets already seen in this batch to handle intra-batch duplicates
+  const seenInBatch = new Set<string>();
+
+  for (const entry of entries) {
+    const { wallet, label, region } = entry;
+
+    // 1. Validate the address
+    if (!isValidStellarAddress(wallet)) {
+      logger.warn(`[admin] import_validator rejected — invalid address | admin=${adminWallet} target=${wallet}`);
+      results.push({ wallet, status: 'invalid', reason: 'invalid Stellar address', label, region });
+      continue;
+    }
+
+    // 2. Check intra-batch duplicate
+    if (seenInBatch.has(wallet)) {
+      results.push({ wallet, status: 'duplicate', reason: 'duplicate within batch', label, region });
+      continue;
+    }
+
+    // 3. Check DB for an already-active (non-revoked) registration
+    const existing = getValidatorByWallet(wallet);
+    if (existing && existing.revoked_at === null) {
+      results.push({ wallet, status: 'duplicate', reason: 'already registered', label, region });
+      seenInBatch.add(wallet);
+      continue;
+    }
+
+    // 4. Register — reuses the same insertValidator path as the single endpoint
+    logger.info(`[admin] action=import_register_validator admin=${adminWallet} target=${wallet}`);
+    // TODO: invoke register_validator on Soroban contract (same as single-registration endpoint)
+    insertValidator(wallet);
+    seenInBatch.add(wallet);
+    results.push({ wallet, status: 'registered', label, region });
+  }
+
+  return results;
+}
+
+/**
+ * POST /api/admin/validators/import
+ *
+ * Accepts either:
+ *   - JSON body:  { validators: [{ wallet, label?, region? }, …] }
+ *   - CSV body:   Content-Type: text/csv  with rows: wallet[,label[,region]]
+ *
+ * Returns a per-entry result summary so partial failures don't block the whole
+ * batch. Invalid addresses and already-registered (non-revoked) validators are
+ * skipped cleanly rather than erroring the request.
+ *
+ * @response 200 { success: true, data: { results, summary: { total, registered, duplicates, invalid } } }
+ * @response 400 { success: false, error: string } - Unparseable body or no entries
+ * @auth Bearer (admin role required)
+ */
+export async function importValidators(req: Request, res: Response, next: NextFunction) {
+  try {
+    const adminWallet = req.account ?? 'unknown';
+    const contentType = (req.headers['content-type'] ?? '').toLowerCase();
+
+    let entries: ImportValidatorEntry[];
+
+    if (contentType.includes('text/csv') || contentType.includes('text/plain')) {
+      // ── CSV path ──────────────────────────────────────────────────────────
+      const rawBody = req.body as string;
+      if (typeof rawBody !== 'string' || !rawBody.trim()) {
+        res.status(400).json({ success: false, error: 'CSV body is empty', code: ErrorCode.VALIDATION_ERROR });
+        return;
+      }
+      entries = parseCsvBody(rawBody);
+    } else {
+      // ── JSON path (default) ───────────────────────────────────────────────
+      const jsonBody = req.body as { validators?: unknown };
+      if (!jsonBody || !Array.isArray(jsonBody.validators)) {
+        res.status(400).json({
+          success: false,
+          error: 'Request body must contain a "validators" array or use Content-Type: text/csv',
+          code: ErrorCode.VALIDATION_ERROR,
+        });
+        return;
+      }
+
+      // Coerce each item — we accept { wallet } at minimum; label/region are optional strings
+      entries = (jsonBody.validators as Array<unknown>).map((item) => {
+        if (typeof item === 'string') return { wallet: item };
+        if (item && typeof item === 'object') {
+          const obj = item as Record<string, unknown>;
+          return {
+            wallet: typeof obj['wallet'] === 'string' ? obj['wallet'] : '',
+            label: typeof obj['label'] === 'string' ? obj['label'] : undefined,
+            region: typeof obj['region'] === 'string' ? obj['region'] : undefined,
+          };
+        }
+        return { wallet: '' };
+      });
+    }
+
+    if (entries.length === 0) {
+      res.status(400).json({ success: false, error: 'No validator entries found in request', code: ErrorCode.VALIDATION_ERROR });
+      return;
+    }
+
+    const results = processBatch(entries, adminWallet);
+
+    const registered = results.filter((r) => r.status === 'registered').length;
+    const duplicates = results.filter((r) => r.status === 'duplicate').length;
+    const invalid = results.filter((r) => r.status === 'invalid').length;
+
+    logger.info(
+      `[admin] action=import_validators admin=${adminWallet} total=${results.length} registered=${registered} duplicates=${duplicates} invalid=${invalid}`,
+    );
+
+    logAuditEvent({
+      action: 'bulk_validator_import',
+      adminWallet,
+      queryParams: { total: results.length, registered, duplicates, invalid },
+      timestamp: new Date().toISOString(),
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        results,
+        summary: {
+          total: results.length,
+          registered,
+          duplicates,
+          invalid,
+        },
+      },
     });
   } catch (err) {
     next(err);

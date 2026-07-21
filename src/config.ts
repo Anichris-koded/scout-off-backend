@@ -131,6 +131,9 @@ const config = {
   /** TTL for pinJson deduplication cache entries in milliseconds (default: 5 min). */
   pinJsonCacheTtlMs: parseInt(process.env.PIN_JSON_CACHE_TTL_MS ?? '300000', 10),
 
+  /** TTL for multi-admin action proposals in milliseconds (default: 1 hour). */
+  adminActionTtlMs: parseInt(process.env.ADMIN_ACTION_TTL_MS ?? '3600000', 10),
+
 };
 
 export default config;

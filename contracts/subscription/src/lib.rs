@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 use scout_off_shared::{
     errors::Error,
     events::{emit_contact_unlocked, emit_scout_subscribed},
@@ -116,5 +116,154 @@ impl SubscriptionContract {
             .set(&DataKey::PlatformFeeBps, &platform_fee_bps);
         bump_instance(&env);
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Ledger};
+
+    fn setup(env: &Env) -> (SubscriptionContractClient<'_>, Address, Address) {
+        env.mock_all_auths();
+        let id = env.register_contract(None, SubscriptionContract);
+        let client = SubscriptionContractClient::new(env, &id);
+        let admin = Address::generate(env);
+        let token = Address::generate(env);
+        (client, admin, token)
+    }
+
+    #[test]
+    fn subscribe_succeeds_and_marks_scout_subscribed() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+
+        let scout = Address::generate(&env);
+        client.subscribe(&scout, &1u32, &1000u32);
+
+        assert!(client.is_subscribed(&scout));
+    }
+
+    #[test]
+    fn subscribe_fails_when_not_initialized() {
+        let env = Env::default();
+        let (client, _admin, _token) = setup(&env);
+
+        let scout = Address::generate(&env);
+        let result = client.try_subscribe(&scout, &1u32, &1000u32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn is_subscribed_false_before_any_subscription() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+
+        let scout = Address::generate(&env);
+        assert!(!client.is_subscribed(&scout));
+    }
+
+    #[test]
+    fn subscription_expires_after_duration_elapses() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+
+        let scout = Address::generate(&env);
+        client.subscribe(&scout, &1u32, &1000u32);
+        assert!(client.is_subscribed(&scout));
+
+        // Advance the ledger sequence past the subscription's expiry.
+        env.ledger().with_mut(|li| {
+            li.sequence_number += 1001;
+        });
+
+        assert!(!client.is_subscribed(&scout));
+    }
+
+    #[test]
+    fn resubscribing_while_active_extends_expiry() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+
+        let scout = Address::generate(&env);
+        client.subscribe(&scout, &1u32, &1000u32);
+        assert!(client.is_subscribed(&scout));
+
+        // Re-subscribing while already active overwrites the stored expiry
+        // with a new one computed from the current sequence. There is no
+        // rejection path for "already subscribed" in the current contract.
+        client.subscribe(&scout, &1u32, &2000u32);
+        assert!(client.is_subscribed(&scout));
+    }
+
+    #[test]
+    fn pay_to_contact_succeeds_and_is_recorded() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+
+        let scout = Address::generate(&env);
+        let player_id = 42u64;
+
+        assert!(!client.has_paid_contact(&scout, &player_id));
+        client.pay_to_contact(&scout, &player_id);
+        assert!(client.has_paid_contact(&scout, &player_id));
+    }
+
+    #[test]
+    fn pay_to_contact_fails_when_not_initialized() {
+        let env = Env::default();
+        let (client, _admin, _token) = setup(&env);
+
+        let scout = Address::generate(&env);
+        let result = client.try_pay_to_contact(&scout, &42u64);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn double_initialize_fails() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+        assert!(client.try_initialize(&admin, &token, &100).is_err());
+    }
+
+    #[test]
+    fn set_platform_fee_bps_succeeds_for_admin() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+
+        client.set_platform_fee_bps(&admin, &250u32);
+        // No getter is exposed for platform_fee_bps, so we assert indirectly:
+        // the call completing without error confirms the admin check passed.
+    }
+
+    #[test]
+    fn set_platform_fee_bps_fails_for_non_admin() {
+        let env = Env::default();
+        let (client, admin, token) = setup(&env);
+        client.initialize(&admin, &token, &100);
+
+        let not_admin = Address::generate(&env);
+        let result = client.try_set_platform_fee_bps(&not_admin, &250u32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_platform_fee_bps_fails_when_not_initialized() {
+        let env = Env::default();
+        let (client, admin, _token) = setup(&env);
+
+        let result = client.try_set_platform_fee_bps(&admin, &250u32);
+        assert!(result.is_err());
     }
 }

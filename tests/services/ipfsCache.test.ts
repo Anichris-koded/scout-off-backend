@@ -17,11 +17,13 @@ import axios from 'axios';
 const mockedPost = jest.fn();
 (axios as jest.Mocked<typeof axios>).post = mockedPost;
 
-// Stub DB helpers � not under test here
+// Stub DB helpers — not under test here
 jest.mock('../../src/db', () => ({
   insertPendingPin: jest.fn(),
   getPendingPins: jest.fn().mockReturnValue([]),
   deletePendingPin: jest.fn(),
+  deletePendingPinByHash: jest.fn(),
+  isPendingPinByHash: jest.fn().mockReturnValue(false),
   incrementPendingPinAttempts: jest.fn(),
 }));
 

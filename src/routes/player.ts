@@ -21,6 +21,7 @@ import { acceptTrialOffer, rejectTrialOffer, rejectOfferSchema } from "../contro
 import { validateBody, validateQuery } from "../middleware/validate";
 import { requireRole, optionalAuth } from "../middleware/auth";
 import { requireOwner } from "../middleware/requireOwner";
+import { methodNotAllowed } from "../middleware/methodNotAllowed";
 
 const router = Router();
 
@@ -28,41 +29,47 @@ const router = Router();
  * GET /api/players
  * optionalAuth so req.account is set when a Bearer token is present (for audit logging)
  */
-router.get("/", optionalAuth, validateQuery(filterSchema), filterPlayers);
+router.route("/")
+  .get(optionalAuth, validateQuery(filterSchema), filterPlayers)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
-router.post(
-  "/register",
-  requireRole("player"),
-  validateBody(registerSchema, { context: "player_registration" }),
-  registerPlayer,
-);
+router.route("/register")
+  .post(
+    requireRole("player"),
+    validateBody(registerSchema, { context: "player_registration" }),
+    registerPlayer,
+  )
+  .all(methodNotAllowed(['POST']));
 
-router.get("/:playerId", getPlayer);
+router.route("/:playerId")
+  .get(getPlayer)
+  .put(
+    requireRole("player"),
+    requireOwner,
+    validateBody(updatePlayerSchema),
+    updatePlayer,
+  )
+  .all(methodNotAllowed(['GET', 'PUT', 'HEAD']));
 
-router.get("/:playerId/milestones", getPlayerMilestones);
-
-router.put(
-  "/:playerId",
-  requireRole("player"),
-  requireOwner,
-  validateBody(updatePlayerSchema),
-  updatePlayer,
-);
+router.route("/:playerId/milestones")
+  .get(getPlayerMilestones)
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * GET /api/players/:playerId/history
  * Admin or profile owner only.
  */
-router.get(
-  "/:playerId/history",
-  optionalAuth,
-  (req: Request, res: Response, next: NextFunction) => {
-    if (req.role === "admin") {
-      return getPlayerHistory(req, res, next);
-    }
-    return requireRole("player")(req, res, () => requireOwner(req, res, next));
-  },
-);
+router.route("/:playerId/history")
+  .get(
+    optionalAuth,
+    (req: Request, res: Response, next: NextFunction) => {
+      if (req.role === "admin") {
+        return getPlayerHistory(req, res, next);
+      }
+      return requireRole("player")(req, res, () => requireOwner(req, res, next));
+    },
+  )
+  .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
  * POST /api/players/:playerId/trial-offers/:offerId/accept
@@ -77,11 +84,9 @@ router.get(
  * @response 409 { success: false, error: string } - Offer already responded to
  * @auth Bearer (player role required)
  */
-router.post(
-  "/:playerId/trial-offers/:offerId/accept",
-  requireRole("player"),
-  acceptTrialOffer,
-);
+router.route("/:playerId/trial-offers/:offerId/accept")
+  .post(requireRole("player"), acceptTrialOffer)
+  .all(methodNotAllowed(['POST']));
 
 /**
  * POST /api/players/:playerId/trial-offers/:offerId/reject
@@ -97,11 +102,12 @@ router.post(
  * @response 409 { success: false, error: string } - Offer already responded to
  * @auth Bearer (player role required)
  */
-router.post(
-  "/:playerId/trial-offers/:offerId/reject",
-  requireRole("player"),
-  validateBody(rejectOfferSchema),
-  rejectTrialOffer,
-);
+router.route("/:playerId/trial-offers/:offerId/reject")
+  .post(
+    requireRole("player"),
+    validateBody(rejectOfferSchema),
+    rejectTrialOffer,
+  )
+  .all(methodNotAllowed(['POST']));
 
 export default router;
