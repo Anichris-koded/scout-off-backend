@@ -4,6 +4,7 @@ import config from '../config';
 import { EventRecord, ContractEventType } from '../types';
 import { runMigrations } from './migrate';
 import { logger } from '../utils/logger';
+import { computeChainHash, auditChainContent, GENESIS_HASH } from '../utils/hashChain';
 
 function slowQueryThresholdMs(): number {
   return parseInt(process.env.SLOW_QUERY_THRESHOLD_MS ?? '50', 10);
@@ -617,6 +618,14 @@ export function hasContactUnlock(scoutWallet: string, playerId: string): boolean
 }
 
 // ─── Audit log helpers ────────────────────────────────────────────────────────
+//
+// audit_log is a single, tamper-evident hash chain (see db/012_audit_log_hash_chain.sql
+// and src/utils/hashChain.ts) shared by two callers: src/services/audit.ts's
+// logAuditEvent (admin actions; event_source='admin_action') and
+// src/utils/audit.ts's recordAudit/queryAudit (validator/player app events;
+// event_source='app_event', formerly an in-memory array — see #464). Every
+// insert reads the previous row's hash and chains onto it, so the two event
+// sources interleave into one continuous, verifiable timeline.
 
 export interface AuditLogRow {
   id: number;
@@ -624,17 +633,61 @@ export interface AuditLogRow {
   admin_wallet: string;
   query_params: string;
   created_at: string;
+  prev_hash: string | null;
+  hash: string;
+  event_source: string;
 }
 
+/**
+ * Inserts a row into audit_log and chains it onto the current end of the
+ * hash chain. better-sqlite3 is fully synchronous and this runs inside a
+ * single db.transaction(), so the "read the last hash, then insert" sequence
+ * below can't race with a concurrent insert.
+ */
 export function insertAuditLog(p: {
   action: string;
   adminWallet?: string;
   queryParams?: Record<string, unknown>;
   createdAt: string;
-}): void {
-  const sql = `INSERT INTO audit_log (action, admin_wallet, query_params, created_at) VALUES (?, ?, ?, ?)`;
-  timedQuery(sql, () =>
-    getDb().prepare(sql).run(p.action, p.adminWallet ?? '', JSON.stringify(p.queryParams ?? {}), p.createdAt)
+  /** Defaults to 'admin_action' (the pre-existing caller, logAuditEvent). */
+  eventSource?: string;
+}): AuditLogRow {
+  const sql = 'INSERT INTO audit_log (hash-chained)';
+  return timedQuery(sql, () =>
+    getDb().transaction(() => {
+      const db = getDb();
+      const adminWallet = p.adminWallet ?? '';
+      const queryParams = JSON.stringify(p.queryParams ?? {});
+      const eventSource = p.eventSource ?? 'admin_action';
+
+      const prevRow = db
+        .prepare('SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1')
+        .get() as { hash: string } | undefined;
+      const prevHash = prevRow?.hash ?? GENESIS_HASH;
+
+      const hash = computeChainHash(
+        auditChainContent({ action: p.action, adminWallet, queryParams, createdAt: p.createdAt, eventSource }),
+        prevHash
+      );
+
+      const info = db
+        .prepare(
+          `INSERT INTO audit_log (action, admin_wallet, query_params, created_at, prev_hash, hash, event_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(p.action, adminWallet, queryParams, p.createdAt, prevHash, hash, eventSource);
+
+      return {
+        id: Number(info.lastInsertRowid),
+        action: p.action,
+        admin_wallet: adminWallet,
+        query_params: queryParams,
+        created_at: p.createdAt,
+        prev_hash: prevHash,
+        hash,
+        event_source: eventSource,
+      };
+    })()
   );
 }
 
@@ -642,6 +695,8 @@ export function getAuditLogs(filters: {
   action?: string;
   startDate?: string;
   endDate?: string;
+  eventSource?: string;
+  actorWallet?: string;
   limit?: number;
   offset?: number;
 }): AuditLogRow[] {
@@ -650,6 +705,8 @@ export function getAuditLogs(filters: {
   if (filters.action) { conditions.push('action = ?'); params.push(filters.action); }
   if (filters.startDate) { conditions.push('created_at >= ?'); params.push(filters.startDate); }
   if (filters.endDate) { conditions.push('created_at <= ?'); params.push(filters.endDate); }
+  if (filters.eventSource) { conditions.push('event_source = ?'); params.push(filters.eventSource); }
+  if (filters.actorWallet) { conditions.push('admin_wallet = ?'); params.push(filters.actorWallet); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit = filters.limit ?? 50;
   const offset = filters.offset ?? 0;
@@ -661,18 +718,44 @@ export function getAuditLogsCount(filters: {
   action?: string;
   startDate?: string;
   endDate?: string;
+  eventSource?: string;
+  actorWallet?: string;
 }): number {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
   if (filters.action) { conditions.push('action = ?'); params.push(filters.action); }
   if (filters.startDate) { conditions.push('created_at >= ?'); params.push(filters.startDate); }
   if (filters.endDate) { conditions.push('created_at <= ?'); params.push(filters.endDate); }
+  if (filters.eventSource) { conditions.push('event_source = ?'); params.push(filters.eventSource); }
+  if (filters.actorWallet) { conditions.push('admin_wallet = ?'); params.push(filters.actorWallet); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const sql = `SELECT COUNT(*) AS count FROM audit_log ${where}`;
   return timedQuery(sql, () => {
     const row = getDb().prepare(sql).get(...params) as { count: number };
     return row.count;
   });
+}
+
+/**
+ * Returns ALL audit_log rows matching the given filters, unpaginated and
+ * ordered by id ascending (i.e. insertion / hash-chain order). Used by
+ * verifyAuditChain() (needs every row, in chain order, to walk the whole
+ * chain) and queryAudit() (the old in-memory auditStore had no pagination,
+ * so this preserves that "just give me everything" contract).
+ */
+export function getAllAuditLogRows(filters: {
+  eventSource?: string;
+  actorWallet?: string;
+  action?: string;
+} = {}): AuditLogRow[] {
+  const conditions: string[] = [];
+  const params: string[] = [];
+  if (filters.action) { conditions.push('action = ?'); params.push(filters.action); }
+  if (filters.eventSource) { conditions.push('event_source = ?'); params.push(filters.eventSource); }
+  if (filters.actorWallet) { conditions.push('admin_wallet = ?'); params.push(filters.actorWallet); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const sql = `SELECT * FROM audit_log ${where} ORDER BY id ASC`;
+  return timedQuery(sql, () => getDb().prepare(sql).all(...params) as AuditLogRow[]);
 }
 
 // ─── Trial offer helpers ──────────────────────────────────────────────────────

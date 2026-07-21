@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import express from 'express';
-import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, importValidators, getPendingActions, getPendingActionById, approvePendingAction } from '../controllers/adminController';
+import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, getAuditChainVerification, importValidators, getPendingActions, getPendingActionById, approvePendingAction } from '../controllers/adminController';
 import { getFeatureFlags, updateFeatureFlag } from '../controllers/featureFlagsController';
 import { exportEvents } from '../controllers/exportController';
 import { listDeadLetters, replayDeadLetter } from '../controllers/webhookAdminController';
@@ -96,6 +96,18 @@ router.route('/fees')
  */
 router.route('/audit')
   .get(requireRole('admin'), getAuditLog)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+/**
+ * GET /api/admin/audit/verify
+ *
+ * Walks the audit_log hash chain and reports whether it is intact (#464).
+ *
+ * @response 200 { success: true, data: { valid, brokenAtId, reason?, rowsChecked } }
+ * @auth Bearer (admin role required)
+ */
+router.route('/audit/verify')
+  .get(requireRole('admin'), getAuditChainVerification)
   .all(methodNotAllowed(['GET', 'HEAD']));
 
 /**
