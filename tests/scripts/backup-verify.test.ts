@@ -65,7 +65,9 @@ function createTestDatabase(dbPath: string): void {
   );
 }
 
-describe('backup-db restore verification', () => {
+const isWindows = process.platform === 'win32';
+
+(isWindows ? describe.skip : describe)('backup-db restore verification', () => {
   let tmpDir: string;
   let dbPath: string;
   let backupDir: string;

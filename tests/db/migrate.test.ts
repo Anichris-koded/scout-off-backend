@@ -424,6 +424,58 @@ describe('runMigrations — integration suite (#508)', () => {
         expect(getIndexes(sharedDb)).toContain('idx_contact_unlocks_scout');
       });
     });
+
+    // --- 010_admin_indexes.sql ---
+    describe('010_admin_indexes.sql', () => {
+      it('creates the validator_stats table', () => {
+        expect(getTables(sharedDb)).toContain('validator_stats');
+      });
+
+      it('validator_stats table has expected columns', () => {
+        const cols = getColumns(sharedDb, 'validator_stats');
+        expect(cols).toContain('wallet');
+        expect(cols).toContain('milestones_approved');
+        expect(cols).toContain('milestones_rejected');
+      });
+
+      it('creates the pending_milestones table', () => {
+        expect(getTables(sharedDb)).toContain('pending_milestones');
+      });
+
+      it('pending_milestones table has expected columns', () => {
+        const cols = getColumns(sharedDb, 'pending_milestones');
+        expect(cols).toContain('milestone_id');
+        expect(cols).toContain('player_id');
+        expect(cols).toContain('validator_wallet');
+        expect(cols).toContain('milestone_type');
+        expect(cols).toContain('evidence_uri');
+        expect(cols).toContain('submitted_at');
+      });
+
+      it('creates idx_pending_milestones_validator index', () => {
+        expect(getIndexes(sharedDb)).toContain('idx_pending_milestones_validator');
+      });
+
+      it('creates idx_pending_milestones_player index', () => {
+        expect(getIndexes(sharedDb)).toContain('idx_pending_milestones_player');
+      });
+
+      it('creates idx_events_type_ledger index', () => {
+        expect(getIndexes(sharedDb)).toContain('idx_events_type_ledger');
+      });
+
+      it('creates idx_subscriptions_scout_cancelled_expires index', () => {
+        expect(getIndexes(sharedDb)).toContain('idx_subscriptions_scout_cancelled_expires');
+      });
+
+      it('creates idx_audit_action_created_at index', () => {
+        expect(getIndexes(sharedDb)).toContain('idx_audit_action_created_at');
+      });
+
+      it('creates idx_pending_milestones_validator_submitted_at index', () => {
+        expect(getIndexes(sharedDb)).toContain('idx_pending_milestones_validator_submitted_at');
+      });
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -599,6 +651,8 @@ describe('runMigrations — integration suite (#508)', () => {
       'trial_offers',
       'revoked_tokens',
       'contact_unlocks',
+      'validator_stats',
+      'pending_milestones',
     ];
 
     for (const table of expectedTables) {
