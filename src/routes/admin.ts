@@ -3,6 +3,7 @@ import express from 'express';
 import { getStats, getAllEvents, getFeeSummary, listValidators, registerValidator, revokeValidator, pauseContract, unpauseContract, withdrawFeesController, introspectToken, revokeTokenController, reindex, getValidatorStatsEndpoint, getAuditLog, importValidators, getPendingActions, getPendingActionById, approvePendingAction } from '../controllers/adminController';
 import { getFeatureFlags, updateFeatureFlag } from '../controllers/featureFlagsController';
 import { exportEvents } from '../controllers/exportController';
+import { listDeadLetters, replayDeadLetter } from '../controllers/webhookAdminController';
 import { requireRole } from '../middleware/auth';
 import { ipAllowlistMiddleware } from '../middleware/ipAllowlist';
 import { methodNotAllowed } from '../middleware/methodNotAllowed';
@@ -308,6 +309,39 @@ router.route('/actions/:id')
 
 router.route('/actions/:id/approve')
   .post(requireRole('admin'), approvePendingAction)
+  .all(methodNotAllowed(['POST']));
+
+/**
+ * GET /api/admin/webhooks/dead-letters
+ *
+ * Lists webhook deliveries that exhausted their retry attempts, most recent first.
+ * Query params: page (default 1), pageSize (default 20, max 100)
+ *
+ * @response 200 { success: true, data: DeadLetterView[], total, page, pageSize }
+ * @response 400 { success: false, error: string } - Invalid page/pageSize
+ * @auth Bearer (admin role required)
+ */
+router.route('/webhooks/dead-letters')
+  .get(requireRole('admin'), listDeadLetters)
+  .all(methodNotAllowed(['GET', 'HEAD']));
+
+/**
+ * POST /api/admin/webhooks/:id/replay
+ *
+ * Manually re-attempts delivery of a single dead-lettered webhook, re-signing
+ * the payload with the subscription's current secret. Marks the row as
+ * replayed on success; on failure, updates the attempt count/reason and
+ * leaves it dead-lettered.
+ *
+ * @response 200 { success: true, message: string, data: { id, status } } - Replayed
+ * @response 400 { success: false, error: string } - Invalid id
+ * @response 404 { success: false, error: string } - No such dead letter
+ * @response 409 { success: false, error: string } - Already replayed
+ * @response 502 { success: false, error: string, data: { id, status, attempts } } - Replay failed
+ * @auth Bearer (admin role required)
+ */
+router.route('/webhooks/:id/replay')
+  .post(requireRole('admin'), replayDeadLetter)
   .all(methodNotAllowed(['POST']));
 
 export default router;

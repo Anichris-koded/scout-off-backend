@@ -745,6 +745,7 @@ In **production** (`NODE_ENV=production`) the same functions throw immediately i
 | `RATE_LIMIT_MAX`       | Max requests per window (default: `60`)                                                   |
 | `WEBHOOK_ENABLED`      | Set to `true` to enable event webhooks (default: `false`)                                 |
 | `WEBHOOK_URL`          | Endpoint to POST contract events to when `WEBHOOK_ENABLED=true`                           |
+| `WEBHOOK_SECRET`       | HMAC secret for the legacy `WEBHOOK_URL` subscription (see `docs/webhooks.md`); a random secret is generated if unset |
 
 ## Testing
 
