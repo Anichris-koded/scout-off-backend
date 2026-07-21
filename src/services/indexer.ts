@@ -242,3 +242,4 @@ export function getValidatorByWallet(wallet: string): ValidatorRow | null {
     `SELECT wallet, registered_at, revoked_at, tx_hash FROM validators WHERE wallet = ?`
   ).get(wallet) as ValidatorRow | undefined) ?? null;
 }
+

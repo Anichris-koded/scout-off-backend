@@ -585,6 +585,26 @@ curl -X GET "http://localhost:4000/api/admin/events?startDate=2024-01-01&endDate
 
 ---
 
+#### `GET /api/admin/events/export`
+
+Streams all indexed contract events as a CSV file. **Requires Bearer auth (admin role).**
+
+Query params (identical semantics to `GET /api/admin/events`): `startDate`, `endDate` (ISO 8601, inclusive), `eventType`.
+
+Rows are read from the database in bounded pages and written to the response as each page
+arrives, so memory usage does not grow with the number of events.
+
+**Response `200`** — `Content-Type: text/csv`, `Content-Disposition: attachment; filename="events.csv"`
+```csv
+event_type,ledger,timestamp,payload
+player_registered,12345,1700000000,"{}"
+milestone_approved,12346,1700000060,"{}"
+```
+
+**Response `400`** — invalid `startDate`/`endDate`, or `startDate` after `endDate`.
+
+---
+
 #### `GET /api/admin/fees`
 
 Fee withdrawal history. **Requires Bearer auth (admin role).**

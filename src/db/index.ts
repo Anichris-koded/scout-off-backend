@@ -168,6 +168,68 @@ export function getEventsCount(type?: ContractEventType): number {
   return row?.count ?? 0;
 }
 
+/** Filter accepted by {@link getEventsPage} — mirrors `adminDateRangeSchema` in adminController. */
+export interface EventsPageFilter {
+  type?: ContractEventType;
+  startDate?: Date;
+  endDate?: Date;
+}
+
+/** A single row read directly off the `events` table, including `ledger`, for CSV export. */
+export interface EventExportRow {
+  type: ContractEventType;
+  ledger: number;
+  createdAt: number | null;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Fetches one bounded page of indexed events (LIMIT/OFFSET), filtered at the
+ * SQL level by type and/or created_at range, ordered by ledger ascending
+ * (ties broken by insertion order via `id`).
+ *
+ * This is the building block that makes streaming export possible: callers
+ * loop, increasing `offset` by `limit` each time, until a page comes back
+ * shorter than `limit` — at no point does the whole table need to live in
+ * memory at once.
+ */
+export function getEventsPage(filter: EventsPageFilter, limit: number, offset: number): EventExportRow[] {
+  const db = getDb();
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (filter.type) {
+    clauses.push('type = ?');
+    params.push(filter.type);
+  }
+  if (filter.startDate) {
+    clauses.push('created_at >= ?');
+    params.push(filter.startDate.getTime());
+  }
+  if (filter.endDate) {
+    clauses.push('created_at <= ?');
+    params.push(filter.endDate.getTime());
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const sql = `SELECT type, ledger, payload, created_at FROM events ${where} ORDER BY ledger ASC, id ASC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const rows = timedQuery(sql, () => db.prepare(sql).all(...(params as unknown[]))) as Array<{
+    type: string;
+    ledger: number;
+    payload: string;
+    created_at: number | null;
+  }>;
+
+  return rows.map((r) => ({
+    type: r.type as ContractEventType,
+    ledger: r.ledger,
+    createdAt: r.created_at,
+    payload: JSON.parse(r.payload),
+  }));
+}
+
 // ─── Player table helpers ─────────────────────────────────────────────────────
 
 export interface PlayerRow {

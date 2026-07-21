@@ -41,10 +41,15 @@ router.route('/events')
 /**
  * GET /api/admin/events/export
  *
- * Exports all indexed Soroban contract events as CSV format.
+ * Streams indexed Soroban contract events as CSV. Rows are fetched from the
+ * database in bounded pages and written to the response as they arrive, so
+ * memory usage stays constant regardless of table size.
  * Useful for data analysis, reporting, and external system integration.
  *
+ * Query params (same semantics as GET /api/admin/events): startDate, endDate (ISO 8601), eventType
+ *
  * @response 200 CSV file with columns: event_type, ledger, timestamp, payload
+ * @response 400 { success: false, error: string } - Invalid date range
  * @response 401 { success: false, error: string } - Missing token
  * @response 403 { success: false, error: string } - Non-admin role
  * @auth Bearer (admin role required)
