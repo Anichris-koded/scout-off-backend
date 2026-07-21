@@ -53,6 +53,7 @@ jest.mock('../../src/services/indexer', () => ({
   insertValidator: jest.fn(),
   revokeValidatorRow: jest.fn(),
   getAllValidators: jest.fn().mockReturnValue([]),
+  getValidatorByWallet: jest.fn().mockReturnValue(null),
 }));
 
 jest.mock('../../src/services/ipfs', () => ({
@@ -95,10 +96,17 @@ jest.mock('../../src/services/stellar', () => ({
   }),
   stellarHealth: jest.fn().mockResolvedValue(true),
   unpauseContractOnChain: jest.fn().mockResolvedValue({ transactionId: 'real-unpause-txid-abc123' }),
+  revokeValidatorOnChain: jest.fn().mockResolvedValue({ transactionId: 'real-revoke-txid-abc123' }),
   ContractActionError: class ContractActionError extends Error {
     constructor(message: string, public readonly code: string) {
       super(message);
       this.name = 'ContractActionError';
+    }
+  },
+  ValidatorActionError: class ValidatorActionError extends Error {
+    constructor(message: string, public readonly code: string) {
+      super(message);
+      this.name = 'ValidatorActionError';
     }
   },
   PaymentError: class PaymentError extends Error {
@@ -499,7 +507,7 @@ describe('POST /api/admin/validators/register — envelope shape', () => {
 });
 
 describe('POST /api/admin/validators/revoke — envelope shape', () => {
-  it('success: { success: true, message: string }', async () => {
+  it('success: { success: true, message: string, transactionId: string }', async () => {
     const res = await request(app)
       .post('/api/admin/validators/revoke')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -507,6 +515,50 @@ describe('POST /api/admin/validators/revoke — envelope shape', () => {
     expect(res.status).toBe(202);
     expect(res.body.success).toBe(true);
     expect(typeof res.body.message).toBe('string');
+    expect(res.body.transactionId).toBe('real-revoke-txid-abc123');
+  });
+
+  it('returns 409 when the local row already shows the validator revoked', async () => {
+    const { getValidatorByWallet } = jest.requireMock('../../src/services/indexer') as {
+      getValidatorByWallet: jest.Mock;
+    };
+    getValidatorByWallet.mockReturnValueOnce({
+      wallet: VALIDATOR_WALLET,
+      registered_at: 1,
+      revoked_at: 2,
+      tx_hash: 'prior-tx',
+    });
+    const res = await request(app)
+      .post('/api/admin/validators/revoke')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ validatorWallet: VALIDATOR_WALLET });
+    expect(res.status).toBe(409);
+    expect(res.body.success).toBe(false);
+    assertErrorEnvelope(res.body);
+  });
+
+  it('returns 503 and does not update the local row when the chain call fails', async () => {
+    const { revokeValidatorOnChain, ValidatorActionError } = jest.requireMock('../../src/services/stellar') as {
+      revokeValidatorOnChain: jest.Mock;
+      ValidatorActionError: new (msg: string, code: string) => Error & { code: string };
+    };
+    const { revokeValidatorRow } = jest.requireMock('../../src/services/indexer') as {
+      revokeValidatorRow: jest.Mock;
+    };
+    revokeValidatorRow.mockClear();
+    revokeValidatorOnChain.mockRejectedValueOnce(
+      new ValidatorActionError('Simulation failed: rpc down', 'NETWORK_ERROR'),
+    );
+    const res = await request(app)
+      .post('/api/admin/validators/revoke')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ validatorWallet: VALIDATOR_WALLET });
+    expect(res.status).toBe(503);
+    expect(res.body.success).toBe(false);
+    assertErrorEnvelope(res.body);
+    expect(revokeValidatorRow).not.toHaveBeenCalled();
+    // restore
+    revokeValidatorOnChain.mockResolvedValue({ transactionId: 'real-revoke-txid-abc123' });
   });
 });
 

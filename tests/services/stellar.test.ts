@@ -3,6 +3,7 @@
  *   - isSubscribed()              — view-only simulation call
  *   - queryMilestones()           — stub returning []
  *   - cancelSubscriptionOnChain() — real Soroban invocation
+ *   - revokeValidatorOnChain()    — real Soroban invocation
  *
  * The Stellar SDK and signer utility are fully mocked so no live RPC is needed.
  */
@@ -78,7 +79,9 @@ import {
   queryMilestones,
   cancelSubscriptionOnChain,
   logTrialOffer,
+  revokeValidatorOnChain,
   PaymentError,
+  ValidatorActionError,
 } from '../../src/services/stellar';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-explicit-any
@@ -299,6 +302,131 @@ describe('cancelSubscriptionOnChain', () => {
     mockGetAccount.mockRejectedValue(new Error('network unreachable'));
 
     await expect(cancelSubscriptionOnChain(WALLET)).rejects.toThrow('network unreachable');
+  });
+});
+
+// ─── revokeValidatorOnChain ───────────────────────────────────────────────────
+
+describe('revokeValidatorOnChain', () => {
+  it('throws PaymentError INVALID_ACCOUNT for empty validatorWallet', async () => {
+    await expect(revokeValidatorOnChain('')).rejects.toMatchObject({
+      name: 'PaymentError',
+      code: 'INVALID_ACCOUNT',
+    });
+    expect(mockGetAccount).not.toHaveBeenCalled();
+  });
+
+  it('submits a real Soroban transaction and returns its hash on success', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'real-revoke-tx-001' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS' });
+
+    const result = await revokeValidatorOnChain(WALLET);
+
+    expect(result.transactionId).toBe('real-revoke-tx-001');
+    expect(mockGetAccount).toHaveBeenCalled();
+    expect(mockSimulate).toHaveBeenCalled();
+    expect(mockAssemble).toHaveBeenCalled();
+    expect(mockSendTransaction).toHaveBeenCalled();
+    expect(mockGetTransaction).toHaveBeenCalledWith('real-revoke-tx-001');
+  });
+
+  it('polls getTransaction until status is no longer NOT_FOUND', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'revoke-poll-hash' });
+    mockGetTransaction
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'SUCCESS' });
+
+    jest.useFakeTimers();
+    const promise = revokeValidatorOnChain(WALLET);
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
+    expect(result.transactionId).toBe('revoke-poll-hash');
+    expect(mockGetTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws ValidatorActionError ALREADY_REVOKED when simulation returns contract error #12', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Contract error: #12' });
+
+    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'ALREADY_REVOKED',
+    });
+    expect(mockSendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws ValidatorActionError NOT_REGISTERED when simulation message contains "not registered"', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Wallet is not registered' });
+
+    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'NOT_REGISTERED',
+    });
+  });
+
+  it('throws ValidatorActionError NETWORK_ERROR for an unknown simulation error', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Something went wrong' });
+
+    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws ValidatorActionError NETWORK_ERROR when sendTransaction returns ERROR status', async () => {
+    mockSendTransaction.mockResolvedValue({
+      status: 'ERROR',
+      errorResult: 'tx_failed',
+      hash: 'revoke-err-hash',
+    });
+
+    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'NETWORK_ERROR',
+    });
+    // Transaction never confirmed — getTransaction should NOT be called
+    expect(mockGetTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws ValidatorActionError NETWORK_ERROR when the confirmed transaction has FAILED status', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'revoke-fail-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'FAILED', resultMetaXdr: '' });
+
+    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws ValidatorActionError ALREADY_REVOKED when FAILED tx XDR contains #12', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'revoke-fail-hash-12' });
+    mockGetTransaction.mockResolvedValue({
+      status: 'FAILED',
+      resultMetaXdr: 'error-payload-#12-encoded',
+    });
+
+    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
+      name: 'ValidatorActionError',
+      code: 'ALREADY_REVOKED',
+    });
+  });
+
+  it('propagates errors from getAccount (RPC unreachable)', async () => {
+    mockGetAccount.mockRejectedValue(new Error('network unreachable'));
+
+    await expect(revokeValidatorOnChain(WALLET)).rejects.toThrow('network unreachable');
+  });
+
+  it('is a ValidatorActionError instance for known on-chain state errors', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Contract error: #12' });
+
+    await expect(revokeValidatorOnChain(WALLET)).rejects.toBeInstanceOf(ValidatorActionError);
   });
 });
 

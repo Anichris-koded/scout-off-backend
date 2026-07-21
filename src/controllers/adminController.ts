@@ -5,7 +5,7 @@ import { getEvents, getEventsCount, getLastLedger, setLastLedger, getValidatorSt
 import { getAllValidators, insertValidator, revokeValidatorRow, getValidatorByWallet } from '../services/indexer';
 import { isValidStellarAddress } from '../utils/stellarAddress';
 import { logAuditEvent } from '../services/audit';
-import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, unpauseContractOnChain } from '../services/stellar';
+import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, unpauseContractOnChain, revokeValidatorOnChain, ValidatorActionError } from '../services/stellar';
 import { revokeToken } from '../services/tokenBlocklist';
 import config from '../config';
 import { logger } from '../utils/logger';
@@ -168,23 +168,94 @@ export async function registerValidator(req: Request, res: Response, next: NextF
   }
 }
 
-/** POST /api/admin/validators/revoke */
+/**
+ * POST /api/admin/validators/revoke
+ * Invokes revoke_validator(validator) on the Soroban contract via the
+ * platform keypair. The local `validators` row is only marked revoked after
+ * on-chain confirmation, so a failed/rejected chain call never leaves the
+ * local row out of sync with contract state.
+ */
 export async function revokeValidator(req: Request, res: Response, next: NextFunction) {
-  try {
-    const adminWallet = req.account ?? 'unknown';
-    const { validatorWallet } = req.body as { validatorWallet?: string };
+  const adminWallet = req.account ?? 'unknown';
+  const { validatorWallet } = req.body as { validatorWallet?: string };
 
-    if (!validatorWallet || !isValidStellarAddress(validatorWallet)) {
-      logger.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
-      res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
+  if (!validatorWallet || !isValidStellarAddress(validatorWallet)) {
+    logger.warn(`[admin] revoke_validator rejected — invalid address | admin=${adminWallet} target=${validatorWallet}`);
+    res.status(400).json({ success: false, error: 'validatorWallet must be a valid Stellar address', code: ErrorCode.VALIDATION_ERROR });
+    return;
+  }
+
+  try {
+    // Short-circuit on already-revoked local state before touching the chain.
+    const existing = getValidatorByWallet(validatorWallet);
+    if (existing?.revoked_at != null) {
+      res.status(409).json({
+        success: false,
+        error: `Validator ${validatorWallet} is already revoked`,
+        code: ErrorCode.CONFLICT,
+      });
       return;
     }
 
     logger.info(`[admin] action=revoke_validator admin=${adminWallet} target=${validatorWallet}`);
-    // TODO: invoke revoke_validator on Soroban contract
-    revokeValidatorRow(validatorWallet);
-    res.status(202).json({ success: true, message: `Validator ${validatorWallet} revocation submitted` });
+    // Audit the attempt before submitting the on-chain transaction (pre-transaction state).
+    logAuditEvent({
+      action: 'validator_revocation',
+      adminWallet,
+      queryParams: { validatorWallet },
+      timestamp: new Date().toISOString(),
+      contractAction: 'revoke_validator',
+    });
+
+    const result = await revokeValidatorOnChain(validatorWallet);
+
+    // Only mutate the local row once the chain has confirmed the revoke —
+    // never mark revoked locally while the contract call is still in flight.
+    revokeValidatorRow(validatorWallet, result.transactionId);
+
+    logAuditEvent({
+      action: 'validator_revocation',
+      adminWallet,
+      queryParams: { validatorWallet, transactionId: result.transactionId, outcome: 'success' },
+      timestamp: new Date().toISOString(),
+      contractAction: 'revoke_validator',
+    });
+
+    res.status(202).json({
+      success: true,
+      message: `Validator ${validatorWallet} revocation submitted`,
+      transactionId: result.transactionId,
+    });
   } catch (err) {
+    logAuditEvent({
+      action: 'validator_revocation',
+      adminWallet,
+      queryParams: {
+        validatorWallet,
+        error: err instanceof Error ? err.message : 'unknown_error',
+        errorCode: err instanceof ValidatorActionError ? err.code : 'UNKNOWN',
+        outcome: 'failure',
+      },
+      timestamp: new Date().toISOString(),
+      contractAction: 'revoke_validator',
+    });
+
+    if (err instanceof ValidatorActionError) {
+      switch (err.code) {
+        case 'ALREADY_REVOKED':
+          res.status(409).json({ success: false, error: 'Validator is already revoked on-chain', code: ErrorCode.CONFLICT });
+          return;
+        case 'NOT_REGISTERED':
+          res.status(409).json({ success: false, error: 'Wallet is not a registered validator on-chain', code: ErrorCode.CONFLICT });
+          return;
+        case 'UNAUTHORIZED':
+          res.status(403).json({ success: false, error: 'Unauthorized to revoke this validator', code: ErrorCode.FORBIDDEN });
+          return;
+        case 'NETWORK_ERROR':
+          res.status(503).json({ success: false, error: 'Network error; please retry', code: ErrorCode.NETWORK_ERROR });
+          return;
+      }
+    }
     next(err);
   }
 }
