@@ -33,7 +33,7 @@ export async function submitMilestoneEvidence(req: Request, res: Response, next:
     const { playerId, milestoneType, evidenceUri } = milestoneSchema.parse(req.body);
     const evidenceCid = await pinJson({ playerId, milestoneType, evidenceUri });
     // Invalidate milestone + player cache so updated progress tier is reflected
-    invalidateMilestoneCache(playerId);
+    await invalidateMilestoneCache(playerId);
 
     const validatorWallet = req.account ?? 'unknown';
     const correlationId = getCorrelationId(req);

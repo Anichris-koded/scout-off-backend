@@ -3,7 +3,7 @@
  *   - isSubscribed()              — view-only simulation call
  *   - queryMilestones()           — stub returning []
  *   - cancelSubscriptionOnChain() — real Soroban invocation
- *   - revokeValidatorOnChain()    — real Soroban invocation
+ *   - pauseContractOnChain()      — real Soroban invocation
  *
  * The Stellar SDK and signer utility are fully mocked so no live RPC is needed.
  */
@@ -79,7 +79,7 @@ import {
   queryMilestones,
   cancelSubscriptionOnChain,
   logTrialOffer,
-  revokeValidatorOnChain,
+  pauseContractOnChain,
   PaymentError,
   ValidatorActionError,
 } from '../../src/services/stellar';
@@ -305,128 +305,101 @@ describe('cancelSubscriptionOnChain', () => {
   });
 });
 
-// ─── revokeValidatorOnChain ───────────────────────────────────────────────────
+// ─── pauseContractOnChain ─────────────────────────────────────────────────────
 
-describe('revokeValidatorOnChain', () => {
-  it('throws PaymentError INVALID_ACCOUNT for empty validatorWallet', async () => {
-    await expect(revokeValidatorOnChain('')).rejects.toMatchObject({
-      name: 'PaymentError',
-      code: 'INVALID_ACCOUNT',
-    });
-    expect(mockGetAccount).not.toHaveBeenCalled();
-  });
-
+describe('pauseContractOnChain', () => {
   it('submits a real Soroban transaction and returns its hash on success', async () => {
-    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'real-revoke-tx-001' });
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'real-pause-tx-hash-001' });
     mockGetTransaction.mockResolvedValue({ status: 'SUCCESS' });
 
-    const result = await revokeValidatorOnChain(WALLET);
+    const result = await pauseContractOnChain();
 
-    expect(result.transactionId).toBe('real-revoke-tx-001');
+    expect(result.transactionId).toBe('real-pause-tx-hash-001');
     expect(mockGetAccount).toHaveBeenCalled();
     expect(mockSimulate).toHaveBeenCalled();
     expect(mockAssemble).toHaveBeenCalled();
     expect(mockSendTransaction).toHaveBeenCalled();
-    expect(mockGetTransaction).toHaveBeenCalledWith('real-revoke-tx-001');
+    expect(mockGetTransaction).toHaveBeenCalledWith('real-pause-tx-hash-001');
   });
 
   it('polls getTransaction until status is no longer NOT_FOUND', async () => {
-    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'revoke-poll-hash' });
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'pause-poll-hash' });
     mockGetTransaction
       .mockResolvedValueOnce({ status: 'NOT_FOUND' })
       .mockResolvedValueOnce({ status: 'NOT_FOUND' })
       .mockResolvedValueOnce({ status: 'SUCCESS' });
 
     jest.useFakeTimers();
-    const promise = revokeValidatorOnChain(WALLET);
+    const promise = pauseContractOnChain();
     await jest.runAllTimersAsync();
     const result = await promise;
     jest.useRealTimers();
 
-    expect(result.transactionId).toBe('revoke-poll-hash');
+    expect(result.transactionId).toBe('pause-poll-hash');
     expect(mockGetTransaction).toHaveBeenCalledTimes(3);
   });
 
-  it('throws ValidatorActionError ALREADY_REVOKED when simulation returns contract error #12', async () => {
+  it('throws ContractActionError CONTRACT_ALREADY_PAUSED when simulation reports the contract is already paused', async () => {
     sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
-    mockSimulate.mockResolvedValue({ error: 'Contract error: #12' });
+    mockSimulate.mockResolvedValue({ error: 'ContractPaused' });
 
-    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
-      name: 'ValidatorActionError',
-      code: 'ALREADY_REVOKED',
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
+      code: 'CONTRACT_ALREADY_PAUSED',
     });
+    // Never submitted — the function throws before sendTransaction
     expect(mockSendTransaction).not.toHaveBeenCalled();
   });
 
-  it('throws ValidatorActionError NOT_REGISTERED when simulation message contains "not registered"', async () => {
+  it('throws ContractActionError CONTRACT_ALREADY_PAUSED when simulation error contains contract code #10', async () => {
     sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
-    mockSimulate.mockResolvedValue({ error: 'Wallet is not registered' });
+    mockSimulate.mockResolvedValue({ error: 'Contract error: #10' });
 
-    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
-      name: 'ValidatorActionError',
-      code: 'NOT_REGISTERED',
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
+      code: 'CONTRACT_ALREADY_PAUSED',
     });
   });
 
-  it('throws ValidatorActionError NETWORK_ERROR for an unknown simulation error', async () => {
+  it('throws ContractActionError NETWORK_ERROR for an unrelated simulation error', async () => {
     sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
     mockSimulate.mockResolvedValue({ error: 'Something went wrong' });
 
-    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
-      name: 'ValidatorActionError',
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
       code: 'NETWORK_ERROR',
     });
   });
 
-  it('throws ValidatorActionError NETWORK_ERROR when sendTransaction returns ERROR status', async () => {
+  it('throws ContractActionError NETWORK_ERROR when sendTransaction returns ERROR status', async () => {
     mockSendTransaction.mockResolvedValue({
       status: 'ERROR',
       errorResult: 'tx_failed',
-      hash: 'revoke-err-hash',
+      hash: 'pause-err-hash',
     });
 
-    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
-      name: 'ValidatorActionError',
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
       code: 'NETWORK_ERROR',
     });
     // Transaction never confirmed — getTransaction should NOT be called
     expect(mockGetTransaction).not.toHaveBeenCalled();
   });
 
-  it('throws ValidatorActionError NETWORK_ERROR when the confirmed transaction has FAILED status', async () => {
-    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'revoke-fail-hash' });
-    mockGetTransaction.mockResolvedValue({ status: 'FAILED', resultMetaXdr: '' });
+  it('throws ContractActionError NETWORK_ERROR when the confirmed transaction has FAILED status', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'pause-fail-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'FAILED' });
 
-    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
-      name: 'ValidatorActionError',
+    await expect(pauseContractOnChain()).rejects.toMatchObject({
+      name: 'ContractActionError',
       code: 'NETWORK_ERROR',
-    });
-  });
-
-  it('throws ValidatorActionError ALREADY_REVOKED when FAILED tx XDR contains #12', async () => {
-    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'revoke-fail-hash-12' });
-    mockGetTransaction.mockResolvedValue({
-      status: 'FAILED',
-      resultMetaXdr: 'error-payload-#12-encoded',
-    });
-
-    await expect(revokeValidatorOnChain(WALLET)).rejects.toMatchObject({
-      name: 'ValidatorActionError',
-      code: 'ALREADY_REVOKED',
     });
   });
 
   it('propagates errors from getAccount (RPC unreachable)', async () => {
     mockGetAccount.mockRejectedValue(new Error('network unreachable'));
 
-    await expect(revokeValidatorOnChain(WALLET)).rejects.toThrow('network unreachable');
-  });
-
-  it('is a ValidatorActionError instance for known on-chain state errors', async () => {
-    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
-    mockSimulate.mockResolvedValue({ error: 'Contract error: #12' });
-
-    await expect(revokeValidatorOnChain(WALLET)).rejects.toBeInstanceOf(ValidatorActionError);
+    await expect(pauseContractOnChain()).rejects.toThrow('network unreachable');
   });
 });
 

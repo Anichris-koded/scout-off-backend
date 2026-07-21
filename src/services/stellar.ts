@@ -710,64 +710,23 @@ export async function unpauseContractOnChain(): Promise<ContractActionResult> {
   });
 }
 
-// ─── Validator revocation ─────────────────────────────────────────────────────
-
-export interface RevokeValidatorResult {
-  transactionId: string;
-}
-
-export type ValidatorActionErrorCode =
-  | 'ALREADY_REVOKED'
-  | 'NOT_REGISTERED'
-  | 'UNAUTHORIZED'
-  | 'NETWORK_ERROR';
-
 /**
- * Thrown when a revoke_validator contract call cannot proceed due to a known
- * on-chain state (already revoked / never registered / caller not
- * authorized) or fails for network/transport reasons. Known-state codes map
- * to 4xx HTTP responses in the controller; NETWORK_ERROR maps to 5xx.
+ * Invoke the contract's `pause()` function via the platform keypair.
+ * Returns the transaction hash on success.
+ * Throws ContractActionError with code 'CONTRACT_ALREADY_PAUSED' if the simulation
+ * indicates the contract is already paused (Soroban error code 10).
+ *
+ * Note: the shared contract error enum (contracts/shared/src/errors.rs) only
+ * defines a single generic `ContractPaused` (#10) variant for paused-state
+ * preconditions — there is no distinct "already paused" vs "not paused"
+ * error code. pause()/unpause() reuse that same variant for whichever
+ * precondition fails, so the client interprets the code based on which
+ * action was invoked (mirrors unpauseContractOnChain's string matching).
  */
-export class ValidatorActionError extends Error {
-  constructor(
-    message: string,
-    public readonly code: ValidatorActionErrorCode,
-  ) {
-    super(message);
-    this.name = 'ValidatorActionError';
-  }
-}
-
-/**
- * Invoke `revoke_validator(validator: Address)` on the Soroban contract via
- * the platform keypair.
- *
- * Flow mirrors unpauseContractOnChain() / cancelSubscriptionOnChain():
- *   getAccount → build tx → simulateTransaction → assembleTransaction
- *   → sign → sendTransaction → poll getTransaction until final status.
- *
- * On success returns the confirmed transaction hash.
- *
- * NOTE on error codes: the exact Soroban error codes the register contract
- * returns for "already revoked" / "not a registered validator" have not been
- * confirmed against the deployed contract source at the time of writing.
- * The string matching below is best-effort — mirroring the #8/#9 pattern
- * cancelSubscriptionOnChain() uses for the subscription contract — and
- * should be tightened once the register contract's actual error enum is
- * available. Any simulation/submission/poll failure that doesn't match a
- * known pattern falls through to a generic NETWORK_ERROR rather than
- * crashing, so callers always get a typed error to branch on.
- */
-export async function revokeValidatorOnChain(
-  validatorWallet: string,
-): Promise<RevokeValidatorResult> {
-  return tracer.startActiveSpan('stellar.revokeValidatorOnChain', async (span) => {
-    span.setAttribute('stellar.contract_function', 'revoke_validator');
+export async function pauseContractOnChain(): Promise<ContractActionResult> {
+  return tracer.startActiveSpan('stellar.pauseContractOnChain', async (span) => {
+    span.setAttribute('stellar.contract_function', 'pause');
     try {
-      if (!validatorWallet) {
-        throw new PaymentError('Missing validatorWallet', 'INVALID_ACCOUNT');
-      }
-
       const { getPlatformKeypair } = await import('../utils/signer');
       const keypair = getPlatformKeypair();
 
@@ -778,27 +737,17 @@ export async function revokeValidatorOnChain(
         fee: BASE_FEE,
         networkPassphrase: networkPassphrase(),
       })
-        .addOperation(
-          contract.call('revoke_validator', Address.fromString(validatorWallet).toScVal()),
-        )
+        .addOperation(contract.call('pause'))
         .setTimeout(30)
         .build();
 
       const simResult = await server.simulateTransaction(tx);
-
       if (SorobanRpc.Api.isSimulationError(simResult)) {
         const errMsg = simResult.error ?? '';
-        // Best-effort contract error mapping — see NOTE above.
-        if (errMsg.includes('#12') || /already.?revoked/i.test(errMsg)) {
-          throw new ValidatorActionError('Validator is already revoked on-chain', 'ALREADY_REVOKED');
+        if (errMsg.includes('ContractPaused') || errMsg.includes('contract_paused') || errMsg.includes('#10')) {
+          throw new ContractActionError('Contract is already paused', 'CONTRACT_ALREADY_PAUSED');
         }
-        if (errMsg.includes('#11') || /not.?(a )?registered/i.test(errMsg)) {
-          throw new ValidatorActionError('Wallet is not a registered validator', 'NOT_REGISTERED');
-        }
-        if (/unauthorized/i.test(errMsg)) {
-          throw new ValidatorActionError('Unauthorized: platform account cannot revoke this validator', 'UNAUTHORIZED');
-        }
-        throw new ValidatorActionError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+        throw new ContractActionError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
       }
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -806,7 +755,7 @@ export async function revokeValidatorOnChain(
 
       const sendResult = await server.sendTransaction(preparedTx);
       if (sendResult.status === 'ERROR') {
-        throw new ValidatorActionError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+        throw new ContractActionError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
       }
 
       const hash = sendResult.hash;
@@ -819,17 +768,7 @@ export async function revokeValidatorOnChain(
       }
 
       if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        // Inspect the result XDR for contract-level error codes.
-        // Cast through unknown because GetFailedTransactionResponse and
-        // GetSuccessfulTransactionResponse share no overlapping status type.
-        const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
-        if (resultMeta.includes('#12') || /already.?revoked/i.test(resultMeta)) {
-          throw new ValidatorActionError('Validator is already revoked on-chain', 'ALREADY_REVOKED');
-        }
-        if (resultMeta.includes('#11') || /not.?(a )?registered/i.test(resultMeta)) {
-          throw new ValidatorActionError('Wallet is not a registered validator', 'NOT_REGISTERED');
-        }
-        throw new ValidatorActionError('revoke_validator transaction failed on-chain', 'NETWORK_ERROR');
+        throw new ContractActionError('Transaction failed on-chain', 'NETWORK_ERROR');
       }
 
       return { transactionId: hash };

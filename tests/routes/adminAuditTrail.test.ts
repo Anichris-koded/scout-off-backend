@@ -3,11 +3,12 @@ import jwt from 'jsonwebtoken';
 import app from '../../src/app';
 import * as auditService from '../../src/services/audit';
 
-// unpauseContract invokes the real Soroban unpause() call unless mocked; the
-// platform keypair isn't configured in tests, so stub it out here (pause is
-// already a simulated stub in the controller and needs no mock).
+// pauseContract/unpauseContract invoke the real Soroban pause()/unpause()
+// calls unless mocked; the platform keypair isn't configured in tests, so
+// stub both out here.
 jest.mock('../../src/services/stellar', () => ({
   ...jest.requireActual('../../src/services/stellar'),
+  pauseContractOnChain: jest.fn().mockResolvedValue({ transactionId: 'mock-pause-txid' }),
   unpauseContractOnChain: jest.fn().mockResolvedValue({ transactionId: 'mock-unpause-txid' }),
 }));
 

@@ -90,6 +90,10 @@ const config = {
   webhook: {
     enabled: process.env.WEBHOOK_ENABLED === 'true',
     url: process.env.WEBHOOK_URL ?? '',
+    // HMAC secret for the legacy single-subscriber webhook (WEBHOOK_URL). Used to seed a
+    // row in `webhook_subscriptions` on startup for backward compatibility. Real
+    // multi-subscriber deployments should manage subscriptions in the DB instead.
+    secret: process.env.WEBHOOK_SECRET ?? '',
   },
   rateLimit: {
     enabled: process.env.RATE_LIMIT_ENABLED !== 'false',

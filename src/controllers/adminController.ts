@@ -5,7 +5,7 @@ import { getEvents, getEventsCount, getLastLedger, setLastLedger, getValidatorSt
 import { getAllValidators, insertValidator, revokeValidatorRow, getValidatorByWallet } from '../services/indexer';
 import { isValidStellarAddress } from '../utils/stellarAddress';
 import { logAuditEvent } from '../services/audit';
-import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, unpauseContractOnChain, revokeValidatorOnChain, ValidatorActionError } from '../services/stellar';
+import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, pauseContractOnChain, unpauseContractOnChain } from '../services/stellar';
 import { revokeToken } from '../services/tokenBlocklist';
 import config from '../config';
 import { logger } from '../utils/logger';
@@ -262,7 +262,8 @@ export async function revokeValidator(req: Request, res: Response, next: NextFun
 
 /**
  * POST /api/admin/contract/pause
- * Stub: signals intent to pause the Soroban contract. Contract-level behavior is simulated.
+ * Invokes pause() on the Soroban contract via the platform keypair.
+ * Returns 409 if the contract is already paused.
  */
 export async function pauseContract(req: Request, res: Response, next: NextFunction) {
   try {
@@ -282,11 +283,21 @@ export async function pauseContract(req: Request, res: Response, next: NextFunct
         timestamp: new Date().toISOString(),
         contractAction: 'pause_contract',
       });
-      // NOTE: Contract-level pause is simulated. Real invocation will call pause() on the Soroban contract.
+
+      const result = await pauseContractOnChain();
+
+      logAuditEvent({
+        action: 'contract_state_change',
+        adminWallet,
+        queryParams: { transactionId: result.transactionId, outcome: 'success' },
+        timestamp: new Date().toISOString(),
+        contractAction: 'pause_contract',
+      });
+
       res.status(202).json({
         success: true,
-        message: 'Contract pause submitted (simulated)',
-        transactionId: 'stub-pause-txn-placeholder',
+        message: 'Contract paused successfully',
+        transactionId: result.transactionId,
       });
       return;
     }
@@ -296,6 +307,10 @@ export async function pauseContract(req: Request, res: Response, next: NextFunct
       data: { actionId: proposal.actionId, collectedSignatures: 1, requiredSignatures: config.adminThreshold },
     });
   } catch (err) {
+    if (err instanceof Error && (err as { code?: string }).code === 'CONTRACT_ALREADY_PAUSED') {
+      res.status(409).json({ success: false, error: 'Contract is already paused', code: ErrorCode.CONFLICT });
+      return;
+    }
     next(err);
   }
 }
