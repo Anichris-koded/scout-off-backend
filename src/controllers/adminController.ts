@@ -5,6 +5,7 @@ import { getEvents, getEventsCount, getLastLedger, setLastLedger, getValidatorSt
 import { getAllValidators, insertValidator, revokeValidatorRow, getValidatorByWallet } from '../services/indexer';
 import { isValidStellarAddress } from '../utils/stellarAddress';
 import { logAuditEvent } from '../services/audit';
+import { verifyAuditChain } from '../utils/auditVerify';
 import { withdrawFees as stellarWithdrawFees, FeeWithdrawalError, FeeWithdrawalResult, pauseContractOnChain, unpauseContractOnChain } from '../services/stellar';
 import { revokeToken } from '../services/tokenBlocklist';
 import config from '../config';
@@ -63,6 +64,24 @@ export async function getAuditLog(req: Request, res: Response, next: NextFunctio
       limit,
       offset,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/admin/audit/verify
+ *
+ * Walks the audit_log hash chain end-to-end and reports whether it is intact,
+ * or — if not — the id of the first row where it breaks (see #464). Useful
+ * for periodic compliance checks / incident response: a `valid: false`
+ * result means a historical row was edited, deleted, or reordered outside
+ * the application (e.g. direct DB access).
+ */
+export async function getAuditChainVerification(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = verifyAuditChain();
+    res.json({ success: true, data: result });
   } catch (err) {
     next(err);
   }
