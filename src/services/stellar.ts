@@ -8,6 +8,7 @@ import {
   Account,
   Address,
   scValToNative,
+  nativeToScVal,
 } from '@stellar/stellar-sdk';
 import config from '../config';
 
@@ -143,9 +144,16 @@ export interface TrialOfferResult {
 }
 
 /**
- * Stub: invoke the contract's `log_trial_offer(scout, player_id, details_uri)` method.
- * Creates an immutable on-chain record of the offer and promotes the player to
- * Elite Tier (Level 3). Replace with a real Soroban invocation when ready.
+ * Invoke the contract's `log_trial_offer(scout, player_id, details_uri)` method.
+ * Creates an immutable on-chain record of the offer; the contract promotes the
+ * player's tier and returns the updated value.
+ *
+ * Flow mirrors cancelSubscriptionOnChain():
+ *   getAccount → build tx → simulateTransaction → assembleTransaction
+ *   → sign → sendTransaction → poll getTransaction until final status.
+ *
+ * On success returns the confirmed transaction hash and the player's
+ * updated tier as reported by the contract's return value.
  */
 export async function logTrialOffer(
   scoutWallet: string,
@@ -155,12 +163,85 @@ export async function logTrialOffer(
   if (!scoutWallet || !playerId || !detailsUri) {
     throw new PaymentError('Missing scoutWallet, playerId, or detailsUri', 'INVALID_ACCOUNT');
   }
-  // TODO: build and submit log_trial_offer Soroban transaction
+
+  const { getPlatformKeypair } = await import('../utils/signer');
+  const keypair = getPlatformKeypair();
+
+  let account;
+  try {
+    account = await server.getAccount(keypair.publicKey());
+  } catch (err) {
+    throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+  }
+
+  const contract = new Contract(config.contractId);
+
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: networkPassphrase(),
+  })
+    .addOperation(
+      contract.call(
+        'log_trial_offer',
+        Address.fromString(scoutWallet).toScVal(),
+        nativeToScVal(playerId, { type: 'string' }),
+        nativeToScVal(detailsUri, { type: 'string' }),
+      ),
+    )
+    .setTimeout(30)
+    .build();
+
+  let simResult;
+  try {
+    simResult = await server.simulateTransaction(tx);
+  } catch (err) {
+    throw new PaymentError(`Simulation request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+  }
+
+  if (SorobanRpc.Api.isSimulationError(simResult)) {
+    throw new PaymentError(`Simulation failed: ${simResult.error}`, 'NETWORK_ERROR');
+  }
+
+  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+  preparedTx.sign(keypair);
+
+  let sendResult;
+  try {
+    sendResult = await server.sendTransaction(preparedTx);
+  } catch (err) {
+    throw new PaymentError(`Submit request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+  }
+  if (sendResult.status === 'ERROR') {
+    throw new PaymentError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+  }
+
+  const hash = sendResult.hash;
+
+  let getResult;
+  try {
+    getResult = await server.getTransaction(hash);
+    while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+      await new Promise((r) => setTimeout(r, 1000));
+      getResult = await server.getTransaction(hash);
+    }
+  } catch (err) {
+    throw new PaymentError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+  }
+
+  if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+    throw new PaymentError('log_trial_offer transaction failed on-chain', 'NETWORK_ERROR');
+  }
+
+  const success = getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+  const playerTier = success.returnValue
+    ? (scValToNative(success.returnValue) as number)
+    : 3;
+
   return {
-    transactionId: `stub-txid-${Date.now()}`,
+    transactionId: hash,
     playerId,
     detailsUri,
-    playerTier: 3,
+    playerTier,
   };
 }
 
