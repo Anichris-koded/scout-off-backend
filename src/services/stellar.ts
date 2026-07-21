@@ -323,23 +323,135 @@ export class FeeWithdrawalError extends Error {
   }
 }
 
+/** Matches the contract's ContractPaused (#10) error in a simulation/result error string. */
+function isContractPausedError(message: string): boolean {
+  return /#10\b/.test(message) || /contract.?paused/i.test(message);
+}
+
 /**
- * Stub: invoke the contract's `withdraw_fees(recipient: Address) -> u128` method.
- * Returns the withdrawn amount and transaction metadata.
- * Throws FeeWithdrawalError with code 'NO_FEES' when balance is zero.
+ * Invoke `withdraw_fees(recipient: Address) -> u128` on the Soroban contract
+ * via the platform keypair.
+ *
+ * Flow mirrors pauseContractOnChain() / cancelSubscriptionOnChain():
+ *   getAccount → build tx → simulateTransaction → assembleTransaction
+ *   → sign → sendTransaction → poll getTransaction until final status.
+ *
+ * On success, parses the confirmed transaction's u128 return value and
+ * throws FeeWithdrawalError('No fees available', 'NO_FEES') if it is zero
+ * rather than returning a zero-amount result. Throws
+ * FeeWithdrawalError(..., 'CONTRACT_PAUSED') if the contract's paused-state
+ * guard (error #10) rejects the call, and (..., 'NETWORK_ERROR') for any
+ * RPC/transport failure.
  */
 export async function withdrawFees(recipient: string): Promise<FeeWithdrawalResult> {
-  if (!recipient) {
-    throw new FeeWithdrawalError('Missing recipient', 'INVALID_RECIPIENT');
-  }
-  // TODO: build and submit withdraw_fees Soroban transaction
-  // Example (pseudocode):
-  //   const tx = await buildInvokeContractTx('withdraw_fees', [Address.fromString(recipient)]);
-  //   const result = await server.sendTransaction(tx);
-  //   const amount = parseU128FromXdr(result.returnValue);
-  //   if (amount === 0n) throw new FeeWithdrawalError('No fees available', 'NO_FEES');
-  //   return { transactionId: result.hash, recipient, amount: amount.toString(), token: 'XLM' };
-  throw new FeeWithdrawalError('No fees available to withdraw', 'NO_FEES');
+  return tracer.startActiveSpan('stellar.withdrawFees', async (span) => {
+    span.setAttribute('stellar.contract_function', 'withdraw_fees');
+    try {
+      if (!recipient) {
+        throw new FeeWithdrawalError('Missing recipient', 'INVALID_RECIPIENT');
+      }
+
+      const { getPlatformKeypair } = await import('../utils/signer');
+      const keypair = getPlatformKeypair();
+
+      let account;
+      try {
+        account = await server.getAccount(keypair.publicKey());
+      } catch (err) {
+        throw new FeeWithdrawalError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+
+      const contract = new Contract(config.contractId);
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: networkPassphrase(),
+      })
+        .addOperation(
+          contract.call('withdraw_fees', Address.fromString(recipient).toScVal()),
+        )
+        .setTimeout(30)
+        .build();
+
+      let simResult;
+      try {
+        simResult = await server.simulateTransaction(tx);
+      } catch (err) {
+        throw new FeeWithdrawalError(`Simulation request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        const errMsg = simResult.error ?? '';
+        if (isContractPausedError(errMsg)) {
+          throw new FeeWithdrawalError('Contract is paused; withdrawal not available', 'CONTRACT_PAUSED');
+        }
+        throw new FeeWithdrawalError(`Simulation failed: ${errMsg}`, 'NETWORK_ERROR');
+      }
+
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      preparedTx.sign(keypair);
+
+      let sendResult;
+      try {
+        sendResult = await server.sendTransaction(preparedTx);
+      } catch (err) {
+        throw new FeeWithdrawalError(`Submit request failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+      if (sendResult.status === 'ERROR') {
+        const errMsg = String(sendResult.errorResult ?? '');
+        if (isContractPausedError(errMsg)) {
+          throw new FeeWithdrawalError('Contract is paused; withdrawal not available', 'CONTRACT_PAUSED');
+        }
+        throw new FeeWithdrawalError(`Submit failed: ${sendResult.errorResult}`, 'NETWORK_ERROR');
+      }
+
+      const hash = sendResult.hash;
+      span.setAttribute('stellar.tx_hash', hash);
+
+      let getResult;
+      try {
+        getResult = await server.getTransaction(hash);
+        while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+          await new Promise((r) => setTimeout(r, 1000));
+          getResult = await server.getTransaction(hash);
+        }
+      } catch (err) {
+        throw new FeeWithdrawalError(`RPC call failed: ${(err as Error).message}`, 'NETWORK_ERROR');
+      }
+
+      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        const resultMeta = ((getResult as unknown) as { resultMetaXdr?: string }).resultMetaXdr ?? '';
+        if (isContractPausedError(resultMeta)) {
+          throw new FeeWithdrawalError('Contract is paused; withdrawal not available', 'CONTRACT_PAUSED');
+        }
+        throw new FeeWithdrawalError('withdraw_fees transaction failed on-chain', 'NETWORK_ERROR');
+      }
+
+      const success = getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+      const amount = success.returnValue
+        ? (scValToNative(success.returnValue) as bigint)
+        : 0n;
+      span.setAttribute('stellar.fee_amount', amount.toString());
+
+      if (amount === 0n) {
+        throw new FeeWithdrawalError('No fees available to withdraw', 'NO_FEES');
+      }
+
+      return {
+        transactionId: hash,
+        recipient,
+        amount: amount.toString(),
+        token: 'XLM',
+      };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      span.setAttribute('error.type', (err as Error).name);
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 export type SubscriptionTier = 'basic' | 'premium';

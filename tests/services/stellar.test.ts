@@ -4,6 +4,7 @@
  *   - queryMilestones()           — stub returning []
  *   - cancelSubscriptionOnChain() — real Soroban invocation
  *   - pauseContractOnChain()      — real Soroban invocation
+ *   - withdrawFees()              — real Soroban invocation
  *
  * The Stellar SDK and signer utility are fully mocked so no live RPC is needed.
  */
@@ -80,7 +81,9 @@ import {
   cancelSubscriptionOnChain,
   logTrialOffer,
   pauseContractOnChain,
+  withdrawFees,
   PaymentError,
+  FeeWithdrawalError,
   ValidatorActionError,
 } from '../../src/services/stellar';
 
@@ -400,6 +403,153 @@ describe('pauseContractOnChain', () => {
     mockGetAccount.mockRejectedValue(new Error('network unreachable'));
 
     await expect(pauseContractOnChain()).rejects.toThrow('network unreachable');
+  });
+});
+
+// ─── withdrawFees ─────────────────────────────────────────────────────────────
+
+describe('withdrawFees', () => {
+  const RECIPIENT = 'G' + 'B'.repeat(55);
+
+  it('throws FeeWithdrawalError INVALID_RECIPIENT for empty recipient', async () => {
+    await expect(withdrawFees('')).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'INVALID_RECIPIENT',
+    });
+    expect(mockGetAccount).not.toHaveBeenCalled();
+  });
+
+  it('submits a real Soroban transaction and returns the parsed u128 amount on success', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'real-withdraw-tx-001' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS', returnValue: { type: 'scvU128' } });
+    sdk.scValToNative.mockReturnValue(500000000n);
+
+    const result = await withdrawFees(RECIPIENT);
+
+    expect(result).toEqual({
+      transactionId: 'real-withdraw-tx-001',
+      recipient: RECIPIENT,
+      amount: '500000000',
+      token: 'XLM',
+    });
+    expect(mockGetAccount).toHaveBeenCalled();
+    expect(mockSimulate).toHaveBeenCalled();
+    expect(mockAssemble).toHaveBeenCalled();
+    expect(mockSendTransaction).toHaveBeenCalled();
+    expect(mockGetTransaction).toHaveBeenCalledWith('real-withdraw-tx-001');
+  });
+
+  it('polls getTransaction until status is no longer NOT_FOUND', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'withdraw-poll-hash' });
+    mockGetTransaction
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
+      .mockResolvedValueOnce({ status: 'SUCCESS', returnValue: { type: 'scvU128' } });
+    sdk.scValToNative.mockReturnValue(100n);
+
+    jest.useFakeTimers();
+    const promise = withdrawFees(RECIPIENT);
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
+    expect(result.transactionId).toBe('withdraw-poll-hash');
+    expect(mockGetTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws FeeWithdrawalError NO_FEES when the contract returns a zero amount', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'zero-fee-tx' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS', returnValue: { type: 'scvU128' } });
+    sdk.scValToNative.mockReturnValue(0n);
+
+    await expect(withdrawFees(RECIPIENT)).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'NO_FEES',
+    });
+  });
+
+  it('throws FeeWithdrawalError NO_FEES when the transaction returns no value', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'no-retval-tx' });
+    mockGetTransaction.mockResolvedValue({ status: 'SUCCESS' });
+
+    await expect(withdrawFees(RECIPIENT)).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'NO_FEES',
+    });
+  });
+
+  it('throws FeeWithdrawalError CONTRACT_PAUSED when simulation reports the contract is paused', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Contract error: #10' });
+
+    await expect(withdrawFees(RECIPIENT)).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'CONTRACT_PAUSED',
+    });
+    expect(mockSendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws FeeWithdrawalError CONTRACT_PAUSED when the confirmed transaction FAILED XDR contains #10', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'paused-fail-hash' });
+    mockGetTransaction.mockResolvedValue({
+      status: 'FAILED',
+      resultMetaXdr: 'error-payload-#10-encoded',
+    });
+
+    await expect(withdrawFees(RECIPIENT)).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'CONTRACT_PAUSED',
+    });
+  });
+
+  it('throws FeeWithdrawalError NETWORK_ERROR for an unrelated simulation error', async () => {
+    sdk.SorobanRpc.Api.isSimulationError.mockReturnValue(true);
+    mockSimulate.mockResolvedValue({ error: 'Something went wrong' });
+
+    await expect(withdrawFees(RECIPIENT)).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws FeeWithdrawalError NETWORK_ERROR when getAccount fails', async () => {
+    mockGetAccount.mockRejectedValue(new Error('rpc unreachable'));
+
+    await expect(withdrawFees(RECIPIENT)).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('throws FeeWithdrawalError NETWORK_ERROR when sendTransaction returns ERROR status', async () => {
+    mockSendTransaction.mockResolvedValue({
+      status: 'ERROR',
+      errorResult: 'tx_failed',
+      hash: 'withdraw-err-hash',
+    });
+
+    await expect(withdrawFees(RECIPIENT)).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'NETWORK_ERROR',
+    });
+    expect(mockGetTransaction).not.toHaveBeenCalled();
+  });
+
+  it('throws FeeWithdrawalError NETWORK_ERROR when the confirmed transaction has FAILED status', async () => {
+    mockSendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'withdraw-fail-hash' });
+    mockGetTransaction.mockResolvedValue({ status: 'FAILED', resultMetaXdr: '' });
+
+    await expect(withdrawFees(RECIPIENT)).rejects.toMatchObject({
+      name: 'FeeWithdrawalError',
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('marks NO_FEES / CONTRACT_PAUSED / INVALID_RECIPIENT as non-retryable and NETWORK_ERROR as retryable', async () => {
+    expect(new FeeWithdrawalError('x', 'NO_FEES').retryable).toBe(false);
+    expect(new FeeWithdrawalError('x', 'CONTRACT_PAUSED').retryable).toBe(false);
+    expect(new FeeWithdrawalError('x', 'INVALID_RECIPIENT').retryable).toBe(false);
+    expect(new FeeWithdrawalError('x', 'NETWORK_ERROR').retryable).toBe(true);
   });
 });
 
