@@ -1,5 +1,3 @@
-import { createId } from '@paralleldrive/cuid2';
-
 jest.mock('../../src/config', () => ({
   __esModule: true,
   default: {
