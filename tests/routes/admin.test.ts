@@ -1,13 +1,15 @@
 import request from 'supertest';
 import { Keypair, Transaction, Networks } from '@stellar/stellar-sdk';
 
-// This file exercises the real indexer/DB layer end-to-end, but revoke_validator
-// now performs a real Soroban RPC round-trip in production. Mock only that one
-// function (keeping everything else — indexer, audit, DB — real) so these
-// route-level tests stay deterministic and offline, matching how contract.test.ts
-// mocks unpauseContractOnChain for the same reason.
+// This file exercises the real indexer/DB layer end-to-end, but
+// register_validator/revoke_validator now perform a real Soroban RPC
+// round-trip in production. Mock only those two functions (keeping
+// everything else — indexer, audit, DB — real) so these route-level tests
+// stay deterministic and offline, matching how contract.test.ts mocks
+// unpauseContractOnChain for the same reason.
 jest.mock('../../src/services/stellar', () => ({
   ...jest.requireActual('../../src/services/stellar'),
+  registerValidatorOnChain: jest.fn().mockResolvedValue({ transactionId: 'e2e-register-txid' }),
   revokeValidatorOnChain: jest.fn().mockResolvedValue({ transactionId: 'e2e-revoke-txid' }),
 }));
 
@@ -80,7 +82,7 @@ describe('POST /api/admin/validators/register', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns 202 for valid admin request', async () => {
+  it('returns 202 with a transactionId for valid admin request', async () => {
     const token = await getToken('admin');
     const res = await request(app)
       .post('/api/admin/validators/register')
@@ -88,6 +90,36 @@ describe('POST /api/admin/validators/register', () => {
       .send({ validatorWallet: VALID_WALLET });
     expect(res.status).toBe(202);
     expect(res.body.success).toBe(true);
+    expect(res.body.transactionId).toBe('e2e-register-txid');
+  });
+
+  it('does not insert the local row and returns an error status when the chain call fails', async () => {
+    const token = await getToken('admin');
+    const wallet = Keypair.random().publicKey();
+
+    const { registerValidatorOnChain, ValidatorActionError } = jest.requireMock('../../src/services/stellar') as {
+      registerValidatorOnChain: jest.Mock;
+      ValidatorActionError: new (msg: string, code: string) => Error & { code: string };
+    };
+    registerValidatorOnChain.mockRejectedValueOnce(
+      new ValidatorActionError('Simulation failed: rpc down', 'NETWORK_ERROR'),
+    );
+
+    const res = await request(app)
+      .post('/api/admin/validators/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ validatorWallet: wallet });
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.body.success).toBe(false);
+
+    const listRes = await request(app)
+      .get('/api/admin/validators')
+      .set('Authorization', `Bearer ${token}`);
+    const found = listRes.body.data.find((v: { wallet: string }) => v.wallet === wallet);
+    expect(found).toBeUndefined();
+
+    // restore default success behaviour for subsequent tests
+    registerValidatorOnChain.mockResolvedValue({ transactionId: 'e2e-register-txid' });
   });
 });
 
